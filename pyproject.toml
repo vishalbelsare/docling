@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "docling"
-version = "2.26.0"  # DO NOT EDIT, updated automatically
+version = "2.28.0"  # DO NOT EDIT, updated automatically
 description = "SDK and CLI for parsing PDF, DOCX, HTML, and more, to a unified document representation for powering downstream workflows such as gen AI applications."
 authors = [
   "Christoph Auer <cau@zurich.ibm.com>",
@@ -46,9 +46,9 @@ packages = [{ include = "docling" }]
 ######################
 python = "^3.9"
 pydantic = "^2.0.0"
-docling-core = {extras = ["chunking"], version = "^2.23.0"}
+docling-core = {extras = ["chunking"], version = "^2.23.1"}
 docling-ibm-models = "^3.4.0"
-docling-parse = "^4.0.0"
+docling-parse = {git = "https://github.com/DS4SD/docling-parse", rev = "cau/line-sanitation-update"}
 filetype = "^1.2.0"
 pypdfium2 = "^4.30.0"
 pydantic-settings = "^2.3.0"
@@ -88,6 +88,7 @@ accelerate = [
 ]
 pillow = ">=10.0.0,<12.0.0"
 tqdm = "^4.65.0"
+pluggy = "^1.0.0"
 pylatexenc = "^2.10"
 
 [tool.poetry.group.dev.dependencies]
@@ -156,6 +157,9 @@ rapidocr = ["rapidocr-onnxruntime", "onnxruntime"]
 docling = "docling.cli.main:app"
 docling-tools = "docling.cli.tools:app"
 
+[tool.poetry.plugins."docling"]
+"docling_defaults" = "docling.models.plugins.defaults"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
@@ -188,6 +192,7 @@ module = [
   "docling_ibm_models.*",
   "easyocr.*",
   "ocrmac.*",
+  "mlx_vlm.*",
   "lxml.*",
   "huggingface_hub.*",
   "transformers.*",

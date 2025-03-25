@@ -21,6 +21,8 @@
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-brightgreen?logo=pre-commit&logoColor=white)](https://github.com/pre-commit/pre-commit)
 [![License MIT](https://img.shields.io/github/license/docling-project/docling)](https://opensource.org/licenses/MIT)
 [![PyPI Downloads](https://static.pepy.tech/badge/docling/month)](https://pepy.tech/projects/docling)
+[![Docling Actor](https://apify.com/actor-badge?actor=vancura/docling?fpr=docling)](https://apify.com/vancura/docling)
+[![LF AI & Data](https://img.shields.io/badge/LF%20AI%20%26%20Data-003778?logo=linuxfoundation&logoColor=fff&color=0094ff&labelColor=003778)](https://lfaidata.foundation/projects/)
 
 Docling simplifies document processing, parsing diverse formats — including advanced PDF understanding — and providing seamless integrations with the gen AI ecosystem.
 
@@ -33,12 +35,12 @@ Docling simplifies document processing, parsing diverse formats — including ad
 * 🔒 Local execution capabilities for sensitive data and air-gapped environments
 * 🤖 Plug-and-play [integrations][integrations] incl. LangChain, LlamaIndex, Crew AI & Haystack for agentic AI
 * 🔍 Extensive OCR support for scanned PDFs and images
+* 🥚 Support of Visual Language Models ([SmolDocling](https://huggingface.co/ds4sd/SmolDocling-256M-preview)) 🆕
 * 💻 Simple and convenient CLI
 
 ### Coming soon
 
 * 📝 Metadata extraction, including title, authors, references & language
-* 📝 Inclusion of Visual Language Models ([SmolDocling](https://huggingface.co/blog/smolervlm#smoldocling))
 * 📝 Chart understanding (Barchart, Piechart, LinePlot, etc)
 * 📝 Complex chemistry understanding (Molecular structures)
 
@@ -55,7 +57,7 @@ More [detailed installation instructions](https://docling-project.github.io/docl
 
 ## Getting started
 
-To convert individual documents, use `convert()`, for example:
+To convert individual documents with python, use `convert()`, for example:
 
 ```python
 from docling.document_converter import DocumentConverter
@@ -68,6 +70,22 @@ print(result.document.export_to_markdown())  # output: "## Docling Technical Rep
 
 More [advanced usage options](https://docling-project.github.io/docling/usage/) are available in
 the docs.
+
+## CLI
+
+Docling has a built-in CLI to run conversions.
+
+```bash
+docling https://arxiv.org/pdf/2206.01062
+```
+
+You can also use 🥚[SmolDocling](https://huggingface.co/ds4sd/SmolDocling-256M-preview) and other VLMs via Docling CLI:
+```bash
+docling --pipeline vlm --vlm-model smoldocling https://arxiv.org/pdf/2206.01062
+```
+This will use MLX acceleration on supported Apple Silicon hardware.
+
+Read more [here](https://docling-project.github.io/docling/usage/)
 
 ## Documentation
 
@@ -119,9 +137,13 @@ If you use Docling in your projects, please consider citing the following:
 The Docling codebase is under MIT license.
 For individual model usage, please refer to the model licenses found in the original packages.
 
-## IBM ❤️ Open Source AI
+## LF AI & Data
 
-Docling has been brought to you by IBM.
+Docling is hosted as a project in the [LF AI & Data Foundation](https://lfaidata.foundation/projects/).
+
+### IBM ❤️ Open Source AI
+
+The project was started by the AI for knowledge team at IBM Research Zurich.
 
 [supported_formats]: https://docling-project.github.io/docling/usage/supported_formats/
 [docling_document]: https://docling-project.github.io/docling/concepts/docling_document/

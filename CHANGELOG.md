@@ -1,3 +1,40 @@
+## [v2.28.0](https://github.com/docling-project/docling/releases/tag/v2.28.0) - 2025-03-19
+
+### Feature
+
+* **SmolDocling:** Support MLX acceleration in VLM pipeline ([#1199](https://github.com/docling-project/docling/issues/1199)) ([`1c26769`](https://github.com/docling-project/docling/commit/1c26769785bcd17c0b8b621c5182ad81134d3915))
+* Add PPTX notes slides ([#474](https://github.com/docling-project/docling/issues/474)) ([`b454aa1`](https://github.com/docling-project/docling/commit/b454aa1551b891644ce4028ed2d7ec8f82c167ab))
+* Updated vlm pipeline (with latest changes from docling-core) ([#1158](https://github.com/docling-project/docling/issues/1158)) ([`2f72167`](https://github.com/docling-project/docling/commit/2f72167ff6421424dea4d93018b0d43af16ec153))
+
+### Fix
+
+* Determine correct page size in DoclingParseV4Backend ([#1196](https://github.com/docling-project/docling/issues/1196)) ([`f5adfb9`](https://github.com/docling-project/docling/commit/f5adfb9724aae1207f23e21d74033f331e6e1ffb))
+* **msword:** Fixing function return in equations handling ([#1194](https://github.com/docling-project/docling/issues/1194)) ([`0b707d0`](https://github.com/docling-project/docling/commit/0b707d0882f5be42505871799387d0b1882bffbf))
+
+### Documentation
+
+* Linux Foundation AI & Data ([#1183](https://github.com/docling-project/docling/issues/1183)) ([`1d680b0`](https://github.com/docling-project/docling/commit/1d680b0a321d95fc6bd65b7bb4d5e15005a0250a))
+* Move apify to docs ([#1182](https://github.com/docling-project/docling/issues/1182)) ([`54a78c3`](https://github.com/docling-project/docling/commit/54a78c307de833b93f9b84cf1f8ed6dace8573cb))
+
+## [v2.27.0](https://github.com/docling-project/docling/releases/tag/v2.27.0) - 2025-03-18
+
+### Feature
+
+* Add factory for ocr engines via plugins ([#1010](https://github.com/docling-project/docling/issues/1010)) ([`6eaae3c`](https://github.com/docling-project/docling/commit/6eaae3cba034599020dc06ebdad3bc3ff0b5a8eb))
+* Add DoclingParseV4 backend, using high-level docling-parse API ([#905](https://github.com/docling-project/docling/issues/905)) ([`3960b19`](https://github.com/docling-project/docling/commit/3960b199d63d0e9d660aeb0cbced02b38bb0b593))
+* **actor:** Docling Actor on Apify infrastructure ([#875](https://github.com/docling-project/docling/issues/875)) ([`772487f`](https://github.com/docling-project/docling/commit/772487f9c91ad2ee53c591c314c72443f9cbfd23))
+* Equations to latex in MSWord backend (with inline groups) ([#1114](https://github.com/docling-project/docling/issues/1114)) ([`6eb718f`](https://github.com/docling-project/docling/commit/6eb718f8493038d1b4b6ae836df5a24aa13cd17e))
+
+### Fix
+
+* **html:** Handle nested empty lists ([#1154](https://github.com/docling-project/docling/issues/1154)) ([`f94da44`](https://github.com/docling-project/docling/commit/f94da44ec5c7a8c92b9dd60e4df5dc945ed6d1ea))
+* Use first table row as col headers ([#1156](https://github.com/docling-project/docling/issues/1156)) ([`0945973`](https://github.com/docling-project/docling/commit/0945973b79d67b74281aba5102ee985ac1de74ea))
+* Pass tests, update docling-core to 2.22.0 ([#1150](https://github.com/docling-project/docling/issues/1150)) ([`aa92a57`](https://github.com/docling-project/docling/commit/aa92a57fa9e7228e894efb9050a0cdb9f287ebfd))
+
+### Documentation
+
+* Fix spelling of picture in usage ([#1165](https://github.com/docling-project/docling/issues/1165)) ([`7e01798`](https://github.com/docling-project/docling/commit/7e01798417c424c05685e0ff5f6f89f70dc3bfcd))
+
 ## [v2.26.0](https://github.com/docling-project/docling/releases/tag/v2.26.0) - 2025-03-11
 
 ### Feature
