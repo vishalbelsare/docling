@@ -250,8 +250,9 @@ class StandardPdfPipeline(PaginatedPipeline):
                     )
                 )
                 conv_res.confidence.parse_score = float(
-                    np.nanmean(
-                        [c.parse_score for c in conv_res.confidence.pages.values()]
+                    np.nanquantile(
+                        [c.parse_score for c in conv_res.confidence.pages.values()],
+                        q=0.05,  # parse score should relate to worst 5% of pages.
                     )
                 )
                 conv_res.confidence.table_score = float(
@@ -266,8 +267,9 @@ class StandardPdfPipeline(PaginatedPipeline):
                 )
 
                 conv_res.confidence.overall_score = float(
-                    np.nanmean(
-                        [c.overall_score for c in conv_res.confidence.pages.values()]
+                    np.nanquantile(
+                        [c.overall_score for c in conv_res.confidence.pages.values()],
+                        q=0.05,  # overall score should relate to worst 5% of page scores.
                     )
                 )
 

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -20,6 +21,11 @@ class PagePreprocessingOptions(BaseModel):
 class PagePreprocessingModel(BasePageModel):
     def __init__(self, options: PagePreprocessingOptions):
         self.options = options
+
+        # Pre-compiled regex patterns for efficiency
+        self.GLYPH_RE = re.compile(r"GLYPH<[0-9A-Fa-f]+>")
+        self.SLASH_G_RE = re.compile(r"(?:/G\d+){2,}")
+        self.FRAG_RE = re.compile(r"\b[A-Za-z](?:/[a-z]{1,3}\.[a-z]{1,3}){2,}\b")
 
     def __call__(
         self, conv_res: ConversionResult, page_batch: Iterable[Page]
@@ -67,7 +73,9 @@ class PagePreprocessingModel(BasePageModel):
             text_scores.append(score)
 
         conv_res.confidence.pages[page.page_no].parse_score = float(
-            np.nanmean(text_scores)
+            np.nanquantile(
+                text_scores, q=0.05
+            )  # To emphasise problems in the parse_score, we take the 10% percentile score of all text cells.
         )
 
         # DEBUG code:
@@ -99,12 +107,26 @@ class PagePreprocessingModel(BasePageModel):
 
         return page
 
-    def rate_text_quality(self, text) -> ScoreValue:
-        """Rates the quality of a given text string by analyzing common PDF parsing issues."""
-
-        # Very poor-man rating function, must improve.
-        contains_glyph = text.find("GLYPH<") >= 0
-        if contains_glyph:
+    def rate_text_quality(self, text: str) -> float:
+        # Hard errors: if any of these patterns are found, return 0.0 immediately.
+        blacklist_chars = ["�"]
+        if (
+            self.GLYPH_RE.search(text)
+            or self.SLASH_G_RE.search(text)
+            or any([text.find(c) >= 0 for c in blacklist_chars])
+        ):
             return 0.0
 
-        return 1.0
+        penalty = 0.0
+
+        # Apply a penalty only if the fragmented words pattern occurs at least three times.
+        frag_matches = self.FRAG_RE.findall(text)
+        if len(frag_matches) >= 3:
+            penalty += 0.1 * len(frag_matches)
+
+        # Additional heuristic: if the average token length is below 2, add a penalty.
+        tokens = text.split()
+        if tokens and (sum(map(len, tokens)) / len(tokens)) < 2:
+            penalty += 0.2
+
+        return max(1.0 - penalty, 0.0)
