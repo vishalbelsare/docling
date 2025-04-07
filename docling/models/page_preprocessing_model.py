@@ -1,10 +1,11 @@
 from pathlib import Path
 from typing import Iterable, Optional
 
+import numpy as np
 from PIL import ImageDraw
 from pydantic import BaseModel
 
-from docling.datamodel.base_models import Page
+from docling.datamodel.base_models import Page, ScoreValue
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.settings import settings
 from docling.models.base_model import BasePageModel
@@ -59,6 +60,16 @@ class PagePreprocessingModel(BasePageModel):
         if self.options.create_parsed_page:
             page.parsed_page = page._backend.get_segmented_page()
 
+        # Rate the text quality from the PDF parser, and aggregate on page
+        text_scores = []
+        for c in page.cells:
+            score = self.rate_text_quality(c.text)
+            text_scores.append(score)
+
+        conv_res.confidence.pages[page.page_no].parse_score = float(
+            np.nanmean(text_scores)
+        )
+
         # DEBUG code:
         def draw_text_boxes(image, cells, show: bool = False):
             draw = ImageDraw.Draw(image)
@@ -87,3 +98,13 @@ class PagePreprocessingModel(BasePageModel):
             draw_text_boxes(page.get_image(scale=1.0), page.cells)
 
         return page
+
+    def rate_text_quality(self, text) -> ScoreValue:
+        """Rates the quality of a given text string by analyzing common PDF parsing issues."""
+
+        # Very poor-man rating function, must improve.
+        contains_glyph = text.find("GLYPH<") >= 0
+        if contains_glyph:
+            return 0.0
+
+        return 1.0

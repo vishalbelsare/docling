@@ -189,6 +189,10 @@ class LayoutModel(BasePageModel):
                         np.mean([c.confidence for c in processed_clusters])
                     )
 
+                    conv_res.confidence.pages[page.page_no].ocr_score = float(
+                        np.mean([c.confidence for c in processed_cells if c.from_ocr])
+                    )
+
                     page.cells = processed_cells
                     page.predictions.layout = LayoutPrediction(
                         clusters=processed_clusters
