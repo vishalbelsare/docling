@@ -1,10 +1,10 @@
 import logging
-from typing import Any, Dict, Iterable, List, Tuple, Union
+from collections.abc import Iterable
+from typing import Any, Dict, List, Tuple, Union
 
 from docling_core.types.doc import BoundingBox, CoordOrigin
 from docling_core.types.legacy_doc.base import BaseCell, BaseText, Ref, Table
 
-from docling.datamodel.base_models import OcrCell
 from docling.datamodel.document import ConversionResult, Page
 
 _log = logging.getLogger(__name__)
@@ -13,7 +13,6 @@ _log = logging.getLogger(__name__)
 def generate_multimodal_pages(
     doc_result: ConversionResult,
 ) -> Iterable[Tuple[str, str, List[Dict[str, Any]], List[Dict[str, Any]], Page]]:
-
     label_to_doclaynet = {
         "title": "title",
         "table-of-contents": "document_index",
@@ -86,11 +85,13 @@ def generate_multimodal_pages(
         if page.size is None:
             return cells
         for cell in page.cells:
-            new_bbox = cell.bbox.to_top_left_origin(
-                page_height=page.size.height
-            ).normalized(page_size=page.size)
-            is_ocr = isinstance(cell, OcrCell)
-            ocr_confidence = cell.confidence if isinstance(cell, OcrCell) else 1.0
+            new_bbox = (
+                cell.rect.to_bounding_box()
+                .to_top_left_origin(page_height=page.size.height)
+                .normalized(page_size=page.size)
+            )
+            is_ocr = cell.from_ocr
+            ocr_confidence = cell.confidence
             cells.append(
                 {
                     "text": cell.text,
@@ -120,7 +121,6 @@ def generate_multimodal_pages(
     if doc.main_text is None:
         return
     for ix, orig_item in enumerate(doc.main_text):
-
         item = doc._resolve_ref(orig_item) if isinstance(orig_item, Ref) else orig_item
         if item is None or item.prov is None or len(item.prov) == 0:
             _log.debug(f"Skipping item {orig_item}")

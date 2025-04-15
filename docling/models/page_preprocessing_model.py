@@ -1,5 +1,6 @@
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 from PIL import ImageDraw
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from docling.utils.profiling import TimeRecorder
 
 class PagePreprocessingOptions(BaseModel):
     images_scale: Optional[float]
+    create_parsed_page: bool
 
 
 class PagePreprocessingModel(BasePageModel):
@@ -55,11 +57,20 @@ class PagePreprocessingModel(BasePageModel):
 
         page.cells = list(page._backend.get_text_cells())
 
+        if self.options.create_parsed_page:
+            page.parsed_page = page._backend.get_segmented_page()
+
         # DEBUG code:
         def draw_text_boxes(image, cells, show: bool = False):
             draw = ImageDraw.Draw(image)
             for c in cells:
-                x0, y0, x1, y1 = c.bbox.as_tuple()
+                x0, y0, x1, y1 = (
+                    c.to_bounding_box().l,
+                    c.to_bounding_box().t,
+                    c.to_bounding_box().r,
+                    c.to_bounding_box().b,
+                )
+
                 draw.rectangle([(x0, y0), (x1, y1)], outline="red")
             if show:
                 image.show()

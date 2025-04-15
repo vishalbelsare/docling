@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from enum import Enum, unique
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Final, Optional, Union
+from typing import Final, Optional, Union
 
 from bs4 import BeautifulSoup, Tag
 from docling_core.types.doc import (
@@ -122,7 +122,6 @@ class PatentUsptoDocumentBackend(DeclarativeDocumentBackend):
 
     @override
     def convert(self) -> DoclingDocument:
-
         if self.parser is not None:
             doc = self.parser.parse(self.patent_content)
             if doc is None:
@@ -163,7 +162,6 @@ class PatentUspto(ABC):
         Returns:
             The patent parsed as a docling document.
         """
-        pass
 
 
 class PatentUsptoIce(PatentUspto):
@@ -265,7 +263,7 @@ class PatentUsptoIce(PatentUspto):
             self.style_html = HtmlEntity()
 
         @override
-        def startElement(self, tag, attributes):  # noqa: N802
+        def startElement(self, tag, attributes):
             """Signal the start of an element.
 
             Args:
@@ -281,7 +279,7 @@ class PatentUsptoIce(PatentUspto):
             self._start_registered_elements(tag, attributes)
 
         @override
-        def skippedEntity(self, name):  # noqa: N802
+        def skippedEntity(self, name):
             """Receive notification of a skipped entity.
 
             HTML entities will be skipped by the parser. This method will unescape them
@@ -315,7 +313,7 @@ class PatentUsptoIce(PatentUspto):
                         self.text += unescaped
 
         @override
-        def endElement(self, tag):  # noqa: N802
+        def endElement(self, tag):
             """Signal the end of an element.
 
             Args:
@@ -603,7 +601,7 @@ class PatentUsptoGrantV2(PatentUspto):
             self.style_html = HtmlEntity()
 
         @override
-        def startElement(self, tag, attributes):  # noqa: N802
+        def startElement(self, tag, attributes):
             """Signal the start of an element.
 
             Args:
@@ -616,7 +614,7 @@ class PatentUsptoGrantV2(PatentUspto):
             self._start_registered_elements(tag, attributes)
 
         @override
-        def skippedEntity(self, name):  # noqa: N802
+        def skippedEntity(self, name):
             """Receive notification of a skipped entity.
 
             HTML entities will be skipped by the parser. This method will unescape them
@@ -650,7 +648,7 @@ class PatentUsptoGrantV2(PatentUspto):
                         self.text += unescaped
 
         @override
-        def endElement(self, tag):  # noqa: N802
+        def endElement(self, tag):
             """Signal the end of an element.
 
             Args:
@@ -691,7 +689,7 @@ class PatentUsptoGrantV2(PatentUspto):
             if tag in [member.value for member in self.Element]:
                 if (
                     tag == self.Element.HEADING.value
-                    and not self.Element.SDOCL.value in self.property
+                    and self.Element.SDOCL.value not in self.property
                 ):
                     level_attr: str = attributes.get("LVL", "")
                     new_level: int = int(level_attr) if level_attr.isnumeric() else 1
@@ -743,7 +741,7 @@ class PatentUsptoGrantV2(PatentUspto):
                 # headers except claims statement
                 elif (
                     self.Element.HEADING.value in self.property
-                    and not self.Element.SDOCL.value in self.property
+                    and self.Element.SDOCL.value not in self.property
                     and text.strip()
                 ):
                     self.parents[self.level + 1] = self.doc.add_heading(
@@ -999,7 +997,7 @@ class PatentUsptoGrantAps(PatentUspto):
                     parent=self.parents[self.level],
                 )
 
-            last_claim.text += f" {value}" if last_claim.text else value
+            last_claim.text += f" {value.strip()}" if last_claim.text else value.strip()
 
         elif field == self.Field.CAPTION.value and section in (
             self.Section.SUMMARY.value,
@@ -1164,7 +1162,7 @@ class PatentUsptoAppV1(PatentUspto):
             self.style_html = HtmlEntity()
 
         @override
-        def startElement(self, tag, attributes):  # noqa: N802
+        def startElement(self, tag, attributes):
             """Signal the start of an element.
 
             Args:
@@ -1177,7 +1175,7 @@ class PatentUsptoAppV1(PatentUspto):
             self._start_registered_elements(tag, attributes)
 
         @override
-        def skippedEntity(self, name):  # noqa: N802
+        def skippedEntity(self, name):
             """Receive notification of a skipped entity.
 
             HTML entities will be skipped by the parser. This method will unescape them
@@ -1211,7 +1209,7 @@ class PatentUsptoAppV1(PatentUspto):
                         self.text += unescaped
 
         @override
-        def endElement(self, tag):  # noqa: N802
+        def endElement(self, tag):
             """Signal the end of an element.
 
             Args:
@@ -1406,6 +1404,10 @@ class XmlTable:
     http://oasis-open.org/specs/soextblx.dtd
     """
 
+    class ColInfo(TypedDict):
+        ncols: int
+        colinfo: list[dict]
+
     class MinColInfoType(TypedDict):
         offset: list[int]
         colwidth: list[int]
@@ -1425,7 +1427,7 @@ class XmlTable:
         self.empty_text = ""
         self._soup = BeautifulSoup(input, features="xml")
 
-    def _create_tg_range(self, tgs: list[dict[str, Any]]) -> dict[int, ColInfoType]:
+    def _create_tg_range(self, tgs: list[ColInfo]) -> dict[int, ColInfoType]:
         """Create a unified range along the table groups.
 
         Args:
@@ -1470,9 +1472,7 @@ class XmlTable:
                 if cw == 0:
                     offset_w0.append(col["offset"][ic])
 
-            min_colinfo["offset"] = sorted(
-                list(set(col["offset"] + min_colinfo["offset"]))
-            )
+            min_colinfo["offset"] = sorted(set(col["offset"] + min_colinfo["offset"]))
 
         # add back the 0 width cols to offset list
         offset_w0 = list(set(offset_w0))
@@ -1523,7 +1523,7 @@ class XmlTable:
 
         return ncols_max
 
-    def _parse_table(self, table: Tag) -> TableData:
+    def _parse_table(self, table: Tag) -> TableData:  # noqa: C901
         """Parse the content of a table tag.
 
         Args:
@@ -1532,19 +1532,26 @@ class XmlTable:
         Returns:
             A docling table object.
         """
-        tgs_align = []
-        tg_secs = table.find_all("tgroup")
+        tgs_align: list[XmlTable.ColInfo] = []
+        tg_secs = table("tgroup")
         if tg_secs:
             for tg_sec in tg_secs:
-                ncols = tg_sec.get("cols", None)
-                if ncols:
-                    ncols = int(ncols)
-                tg_align = {"ncols": ncols, "colinfo": []}
-                cs_secs = tg_sec.find_all("colspec")
+                if not isinstance(tg_sec, Tag):
+                    continue
+                col_val = tg_sec.get("cols")
+                ncols = (
+                    int(col_val)
+                    if isinstance(col_val, str) and col_val.isnumeric()
+                    else 1
+                )
+                tg_align: XmlTable.ColInfo = {"ncols": ncols, "colinfo": []}
+                cs_secs = tg_sec("colspec")
                 if cs_secs:
                     for cs_sec in cs_secs:
-                        colname = cs_sec.get("colname", None)
-                        colwidth = cs_sec.get("colwidth", None)
+                        if not isinstance(cs_sec, Tag):
+                            continue
+                        colname = cs_sec.get("colname")
+                        colwidth = cs_sec.get("colwidth")
                         tg_align["colinfo"].append(
                             {"colname": colname, "colwidth": colwidth}
                         )
@@ -1565,16 +1572,23 @@ class XmlTable:
         table_data: list[TableCell] = []
         i_row_global = 0
         is_row_empty: bool = True
-        tg_secs = table.find_all("tgroup")
+        tg_secs = table("tgroup")
         if tg_secs:
             for itg, tg_sec in enumerate(tg_secs):
+                if not isinstance(tg_sec, Tag):
+                    continue
                 tg_range = tgs_range[itg]
-                row_secs = tg_sec.find_all(["row", "tr"])
+                row_secs = tg_sec(["row", "tr"])
 
                 if row_secs:
                     for row_sec in row_secs:
-                        entry_secs = row_sec.find_all(["entry", "td"])
-                        is_header: bool = row_sec.parent.name in ["thead"]
+                        if not isinstance(row_sec, Tag):
+                            continue
+                        entry_secs = row_sec(["entry", "td"])
+                        is_header: bool = (
+                            row_sec.parent is not None
+                            and row_sec.parent.name == "thead"
+                        )
 
                         ncols = 0
                         local_row: list[TableCell] = []
@@ -1582,23 +1596,26 @@ class XmlTable:
                         if entry_secs:
                             wrong_nbr_cols = False
                             for ientry, entry_sec in enumerate(entry_secs):
+                                if not isinstance(entry_sec, Tag):
+                                    continue
                                 text = entry_sec.get_text().strip()
 
                                 # start-end
-                                namest = entry_sec.attrs.get("namest", None)
-                                nameend = entry_sec.attrs.get("nameend", None)
-                                if isinstance(namest, str) and namest.isnumeric():
-                                    namest = int(namest)
-                                else:
-                                    namest = ientry + 1
+                                namest = entry_sec.get("namest")
+                                nameend = entry_sec.get("nameend")
+                                start = (
+                                    int(namest)
+                                    if isinstance(namest, str) and namest.isnumeric()
+                                    else ientry + 1
+                                )
                                 if isinstance(nameend, str) and nameend.isnumeric():
-                                    nameend = int(nameend)
+                                    end = int(nameend)
                                     shift = 0
                                 else:
-                                    nameend = ientry + 2
+                                    end = ientry + 2
                                     shift = 1
 
-                                if nameend > len(tg_range["cell_offst"]):
+                                if end > len(tg_range["cell_offst"]):
                                     wrong_nbr_cols = True
                                     self.nbr_messages += 1
                                     if self.nbr_messages <= self.max_nbr_messages:
@@ -1608,8 +1625,8 @@ class XmlTable:
                                     break
 
                                 range_ = [
-                                    tg_range["cell_offst"][namest - 1],
-                                    tg_range["cell_offst"][nameend - 1] - shift,
+                                    tg_range["cell_offst"][start - 1],
+                                    tg_range["cell_offst"][end - 1] - shift,
                                 ]
 
                                 # add row and replicate cell if needed
@@ -1668,7 +1685,7 @@ class XmlTable:
             A docling table data.
         """
         section = self._soup.find("table")
-        if section is not None:
+        if isinstance(section, Tag):
             table = self._parse_table(section)
             if table.num_rows == 0 or table.num_cols == 0:
                 _log.warning("The parsed USPTO table is empty")
@@ -1701,7 +1718,7 @@ class HtmlEntity:
                 "0": "&#8304;",
                 "+": "&#8314;",
                 "-": "&#8315;",
-                "−": "&#8315;",
+                "−": "&#8315;",  # noqa: RUF001
                 "=": "&#8316;",
                 "(": "&#8317;",
                 ")": "&#8318;",
@@ -1725,7 +1742,7 @@ class HtmlEntity:
                 "0": "&#8320;",
                 "+": "&#8330;",
                 "-": "&#8331;",
-                "−": "&#8331;",
+                "−": "&#8331;",  # noqa: RUF001
                 "=": "&#8332;",
                 "(": "&#8333;",
                 ")": "&#8334;",

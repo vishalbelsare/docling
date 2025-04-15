@@ -21,13 +21,15 @@ def test_doc_paths():
 
 
 def get_converter():
-
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = False
 
     converter = DocumentConverter(
         format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options),
+            InputFormat.IMAGE: PdfFormatOption(
+                pipeline_options=pipeline_options,
+            ),
         }
     )
 

@@ -1,5 +1,6 @@
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, List, Literal, Optional, Tuple, Union
+from typing import List, Literal, Optional, Union
 
 import numpy as np
 from docling_core.types.doc import (
@@ -113,7 +114,7 @@ class DocumentPictureClassifier(BaseEnrichmentModel):
             repo_id="ds4sd/DocumentFigureClassifier",
             force_download=force,
             local_dir=local_dir,
-            revision="v1.0.0",
+            revision="v1.0.1",
         )
 
         return Path(download_path)

@@ -1,13 +1,10 @@
 from pathlib import Path
 
-from docling.backend.docling_parse_backend import DoclingParseDocumentBackend
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import (
     AcceleratorDevice,
     AcceleratorOptions,
     PdfPipelineOptions,
-    TesseractCliOcrOptions,
-    TesseractOcrOptions,
 )
 from docling.datamodel.settings import settings
 from docling.document_converter import DocumentConverter, PdfFormatOption
@@ -29,6 +26,9 @@ def main():
     # accelerator_options = AcceleratorOptions(
     #     num_threads=8, device=AcceleratorDevice.CUDA
     # )
+
+    # easyocr doesnt support cuda:N allocation, defaults to cuda:0
+    # accelerator_options = AcceleratorOptions(num_threads=8, device="cuda:1")
 
     pipeline_options = PdfPipelineOptions()
     pipeline_options.accelerator_options = accelerator_options

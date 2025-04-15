@@ -9,7 +9,10 @@ from docling_core.types.doc import (
     Size,
     TableCell,
 )
-from docling_core.types.io import (  # DO ΝΟΤ REMOVE; explicitly exposed from this location
+from docling_core.types.doc.page import SegmentedPdfPage, TextCell
+
+# DO NOT REMOVE; explicitly exposed from this location
+from docling_core.types.io import (
     DocumentStream,
 )
 from PIL.Image import Image
@@ -34,13 +37,14 @@ class InputFormat(str, Enum):
     DOCX = "docx"
     PPTX = "pptx"
     HTML = "html"
-    XML_PUBMED = "xml_pubmed"
     IMAGE = "image"
     PDF = "pdf"
     ASCIIDOC = "asciidoc"
     MD = "md"
+    CSV = "csv"
     XLSX = "xlsx"
     XML_USPTO = "xml_uspto"
+    XML_JATS = "xml_jats"
     JSON_DOCLING = "json_docling"
 
 
@@ -48,6 +52,7 @@ class OutputFormat(str, Enum):
     MARKDOWN = "md"
     JSON = "json"
     HTML = "html"
+    HTML_SPLIT_PAGE = "html_split_page"
     TEXT = "text"
     DOCTAGS = "doctags"
 
@@ -58,9 +63,10 @@ FormatToExtensions: Dict[InputFormat, List[str]] = {
     InputFormat.PDF: ["pdf"],
     InputFormat.MD: ["md"],
     InputFormat.HTML: ["html", "htm", "xhtml"],
-    InputFormat.XML_PUBMED: ["xml", "nxml"],
+    InputFormat.XML_JATS: ["xml", "nxml"],
     InputFormat.IMAGE: ["jpg", "jpeg", "png", "tif", "tiff", "bmp"],
     InputFormat.ASCIIDOC: ["adoc", "asciidoc", "asc"],
+    InputFormat.CSV: ["csv"],
     InputFormat.XLSX: ["xlsx"],
     InputFormat.XML_USPTO: ["xml", "txt"],
     InputFormat.JSON_DOCLING: ["json"],
@@ -77,7 +83,7 @@ FormatToMimeType: Dict[InputFormat, List[str]] = {
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ],
     InputFormat.HTML: ["text/html", "application/xhtml+xml"],
-    InputFormat.XML_PUBMED: ["application/xml"],
+    InputFormat.XML_JATS: ["application/xml"],
     InputFormat.IMAGE: [
         "image/png",
         "image/jpeg",
@@ -88,6 +94,7 @@ FormatToMimeType: Dict[InputFormat, List[str]] = {
     InputFormat.PDF: ["application/pdf"],
     InputFormat.ASCIIDOC: ["text/asciidoc"],
     InputFormat.MD: ["text/markdown", "text/x-markdown"],
+    InputFormat.CSV: ["text/csv"],
     InputFormat.XLSX: [
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     ],
@@ -120,14 +127,10 @@ class ErrorItem(BaseModel):
     error_message: str
 
 
-class Cell(BaseModel):
-    id: int
-    text: str
-    bbox: BoundingBox
-
-
-class OcrCell(Cell):
-    confidence: float
+# class Cell(BaseModel):
+#    id: int
+#    text: str
+#    bbox: BoundingBox
 
 
 class Cluster(BaseModel):
@@ -135,7 +138,7 @@ class Cluster(BaseModel):
     label: DocItemLabel
     bbox: BoundingBox
     confidence: float = 1.0
-    cells: List[Cell] = []
+    cells: List[TextCell] = []
     children: List["Cluster"] = []  # Add child cluster support
 
 
@@ -149,6 +152,10 @@ class BasePageElement(BaseModel):
 
 class LayoutPrediction(BaseModel):
     clusters: List[Cluster] = []
+
+
+class VlmPrediction(BaseModel):
+    text: str = ""
 
 
 class ContainerElement(
@@ -194,6 +201,7 @@ class PagePredictions(BaseModel):
     tablestructure: Optional[TableStructurePrediction] = None
     figures_classification: Optional[FigureClassificationPrediction] = None
     equations_prediction: Optional[EquationPrediction] = None
+    vlm_response: Optional[VlmPrediction] = None
 
 
 PageElement = Union[TextElement, Table, FigureElement, ContainerElement]
@@ -218,7 +226,8 @@ class Page(BaseModel):
     page_no: int
     # page_hash: Optional[str] = None
     size: Optional[Size] = None
-    cells: List[Cell] = []
+    cells: List[TextCell] = []
+    parsed_page: Optional[SegmentedPdfPage] = None
     predictions: PagePredictions = PagePredictions()
     assembled: Optional[AssembledUnit] = None
 
@@ -226,9 +235,9 @@ class Page(BaseModel):
         None  # Internal PDF backend. By default it is cleared during assembling.
     )
     _default_image_scale: float = 1.0  # Default image scale for external usage.
-    _image_cache: Dict[float, Image] = (
-        {}
-    )  # Cache of images in different scales. By default it is cleared during assembling.
+    _image_cache: Dict[
+        float, Image
+    ] = {}  # Cache of images in different scales. By default it is cleared during assembling.
 
     def get_image(
         self, scale: float = 1.0, cropbox: Optional[BoundingBox] = None
@@ -236,7 +245,7 @@ class Page(BaseModel):
         if self._backend is None:
             return self._image_cache.get(scale, None)
 
-        if not scale in self._image_cache:
+        if scale not in self._image_cache:
             if cropbox is None:
                 self._image_cache[scale] = self._backend.get_page_image(scale=scale)
             else:
@@ -256,3 +265,35 @@ class Page(BaseModel):
     @property
     def image(self) -> Optional[Image]:
         return self.get_image(scale=self._default_image_scale)
+
+
+## OpenAI API Request / Response Models ##
+
+
+class OpenAiChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class OpenAiResponseChoice(BaseModel):
+    index: int
+    message: OpenAiChatMessage
+    finish_reason: str
+
+
+class OpenAiResponseUsage(BaseModel):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class OpenAiApiResponse(BaseModel):
+    model_config = ConfigDict(
+        protected_namespaces=(),
+    )
+
+    id: str
+    model: Optional[str] = None  # returned by openai
+    choices: List[OpenAiResponseChoice]
+    created: int
+    usage: OpenAiResponseUsage

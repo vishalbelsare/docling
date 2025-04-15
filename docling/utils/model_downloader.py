@@ -2,7 +2,10 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from docling.datamodel.pipeline_options import smolvlm_picture_description
+from docling.datamodel.pipeline_options import (
+    granite_picture_description,
+    smolvlm_picture_description,
+)
 from docling.datamodel.settings import settings
 from docling.models.code_formula_model import CodeFormulaModel
 from docling.models.document_picture_classifier import DocumentPictureClassifier
@@ -23,7 +26,8 @@ def download_models(
     with_tableformer: bool = True,
     with_code_formula: bool = True,
     with_picture_classifier: bool = True,
-    with_smolvlm: bool = True,
+    with_smolvlm: bool = False,
+    with_granite_vision: bool = False,
     with_easyocr: bool = True,
 ):
     if output_dir is None:
@@ -33,7 +37,7 @@ def download_models(
     output_dir.mkdir(exist_ok=True, parents=True)
 
     if with_layout:
-        _log.info(f"Downloading layout model...")
+        _log.info("Downloading layout model...")
         LayoutModel.download_models(
             local_dir=output_dir / LayoutModel._model_repo_folder,
             force=force,
@@ -41,7 +45,7 @@ def download_models(
         )
 
     if with_tableformer:
-        _log.info(f"Downloading tableformer model...")
+        _log.info("Downloading tableformer model...")
         TableStructureModel.download_models(
             local_dir=output_dir / TableStructureModel._model_repo_folder,
             force=force,
@@ -49,7 +53,7 @@ def download_models(
         )
 
     if with_picture_classifier:
-        _log.info(f"Downloading picture classifier model...")
+        _log.info("Downloading picture classifier model...")
         DocumentPictureClassifier.download_models(
             local_dir=output_dir / DocumentPictureClassifier._model_repo_folder,
             force=force,
@@ -57,7 +61,7 @@ def download_models(
         )
 
     if with_code_formula:
-        _log.info(f"Downloading code formula model...")
+        _log.info("Downloading code formula model...")
         CodeFormulaModel.download_models(
             local_dir=output_dir / CodeFormulaModel._model_repo_folder,
             force=force,
@@ -65,7 +69,7 @@ def download_models(
         )
 
     if with_smolvlm:
-        _log.info(f"Downloading SmolVlm model...")
+        _log.info("Downloading SmolVlm model...")
         PictureDescriptionVlmModel.download_models(
             repo_id=smolvlm_picture_description.repo_id,
             local_dir=output_dir / smolvlm_picture_description.repo_cache_folder,
@@ -73,8 +77,17 @@ def download_models(
             progress=progress,
         )
 
+    if with_granite_vision:
+        _log.info("Downloading Granite Vision model...")
+        PictureDescriptionVlmModel.download_models(
+            repo_id=granite_picture_description.repo_id,
+            local_dir=output_dir / granite_picture_description.repo_cache_folder,
+            force=force,
+            progress=progress,
+        )
+
     if with_easyocr:
-        _log.info(f"Downloading easyocr models...")
+        _log.info("Downloading easyocr models...")
         EasyOcrModel.download_models(
             local_dir=output_dir / EasyOcrModel._model_repo_folder,
             force=force,

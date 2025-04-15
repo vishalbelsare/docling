@@ -83,7 +83,7 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
                 # otherwise they represent emphasis (bold or italic)
                 self.markdown = self._shorten_underscore_sequences(text_stream)
             if isinstance(self.path_or_stream, Path):
-                with open(self.path_or_stream, "r", encoding="utf-8") as f:
+                with open(self.path_or_stream, encoding="utf-8") as f:
                     md_content = f.read()
                     # remove invalid sequences
                     # very long sequences of underscores will lead to unnecessary long processing times.
@@ -136,7 +136,7 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
                         end_row_offset_idx=trow_ind + row_span,
                         start_col_offset_idx=tcol_ind,
                         end_col_offset_idx=tcol_ind + col_span,
-                        col_header=False,
+                        column_header=trow_ind == 0,
                         row_header=False,
                     )
                     tcells.append(icell)
@@ -168,7 +168,7 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
             )
         self.inline_texts = []
 
-    def _iterate_elements(
+    def _iterate_elements(  # noqa: C901
         self,
         element: marko.element.Element,
         depth: int,
@@ -176,7 +176,6 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
         visited: Set[marko.element.Element],
         parent_item: Optional[NodeItem] = None,
     ):
-
         if element in visited:
             return
 
@@ -212,9 +211,16 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
             traverse(element)
             snippet_text = "".join(strings)
             if len(snippet_text) > 0:
-                parent_item = doc.add_text(
-                    label=doc_label, parent=parent_item, text=snippet_text
-                )
+                if doc_label == DocItemLabel.SECTION_HEADER:
+                    parent_item = doc.add_heading(
+                        text=snippet_text,
+                        level=element.level - 1,
+                        parent=parent_item,
+                    )
+                else:
+                    parent_item = doc.add_text(
+                        label=doc_label, parent=parent_item, text=snippet_text
+                    )
 
         elif isinstance(element, marko.block.List):
             has_non_empty_list_items = False
@@ -229,15 +235,18 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
             if has_non_empty_list_items:
                 label = GroupLabel.ORDERED_LIST if element.ordered else GroupLabel.LIST
                 parent_item = doc.add_group(
-                    label=label, name=f"list", parent=parent_item
+                    label=label, name="list", parent=parent_item
                 )
 
-        elif isinstance(element, marko.block.ListItem) and len(element.children) > 0:
+        elif (
+            isinstance(element, marko.block.ListItem)
+            and len(element.children) > 0
+            and isinstance((first_child := element.children[0]), marko.block.Paragraph)
+        ):
             self._close_table(doc)
             self._process_inline_text(parent_item, doc)
             _log.debug(" - List item")
 
-            first_child = element.children[0]
             snippet_text = str(first_child.children[0].children)  # type: ignore
             is_numbered = False
             if (
@@ -310,7 +319,7 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
             self._html_blocks += 1
             self._process_inline_text(parent_item, doc)
             self._close_table(doc)
-            _log.debug("HTML Block: {}".format(element))
+            _log.debug(f"HTML Block: {element}")
             if (
                 len(element.body) > 0
             ):  # If Marko doesn't return any content for HTML block, skip it
@@ -322,7 +331,7 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
         else:
             if not isinstance(element, str):
                 self._close_table(doc)
-                _log.debug("Some other element: {}".format(element))
+                _log.debug(f"Some other element: {element}")
 
         processed_block_types = (
             marko.block.Heading,
@@ -388,7 +397,6 @@ class MarkdownDocumentBackend(DeclarativeDocumentBackend):
 
             # if HTML blocks were detected, export to HTML and delegate to HTML backend
             if self._html_blocks > 0:
-
                 # export to HTML
                 html_backend_cls = HTMLDocumentBackend
                 html_str = doc.export_to_html()

@@ -1,18 +1,21 @@
 import logging
 import warnings
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import List, Optional, Type
 
 import numpy
 from docling_core.types.doc import BoundingBox, CoordOrigin
+from docling_core.types.doc.page import BoundingRectangle, TextCell
 
-from docling.datamodel.base_models import Cell, OcrCell, Page
+from docling.datamodel.base_models import Page
 from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import (
     AcceleratorDevice,
     AcceleratorOptions,
     EasyOcrOptions,
+    OcrOptions,
 )
 from docling.datamodel.settings import settings
 from docling.models.base_ocr_model import BaseOcrModel
@@ -33,7 +36,12 @@ class EasyOcrModel(BaseOcrModel):
         options: EasyOcrOptions,
         accelerator_options: AcceleratorOptions,
     ):
-        super().__init__(enabled=enabled, options=options)
+        super().__init__(
+            enabled=enabled,
+            artifacts_path=artifacts_path,
+            options=options,
+            accelerator_options=accelerator_options,
+        )
         self.options: EasyOcrOptions
 
         self.scale = 3  # multiplier for 72 dpi == 216 dpi.
@@ -51,12 +59,10 @@ class EasyOcrModel(BaseOcrModel):
                 device = decide_device(accelerator_options.device)
                 # Enable easyocr GPU if running on CUDA, MPS
                 use_gpu = any(
-                    [
-                        device.startswith(x)
-                        for x in [
-                            AcceleratorDevice.CUDA.value,
-                            AcceleratorDevice.MPS.value,
-                        ]
+                    device.startswith(x)
+                    for x in [
+                        AcceleratorDevice.CUDA.value,
+                        AcceleratorDevice.MPS.value,
                     ]
                 )
             else:
@@ -91,8 +97,10 @@ class EasyOcrModel(BaseOcrModel):
         progress: bool = False,
     ) -> Path:
         # Models are located in https://github.com/JaidedAI/EasyOCR/blob/master/easyocr/config.py
-        from easyocr.config import detection_models as det_models_dict
-        from easyocr.config import recognition_models as rec_models_dict
+        from easyocr.config import (
+            detection_models as det_models_dict,
+            recognition_models as rec_models_dict,
+        )
 
         if local_dir is None:
             local_dir = settings.cache_dir / "models" / EasyOcrModel._model_repo_folder
@@ -119,13 +127,11 @@ class EasyOcrModel(BaseOcrModel):
     def __call__(
         self, conv_res: ConversionResult, page_batch: Iterable[Page]
     ) -> Iterable[Page]:
-
         if not self.enabled:
             yield from page_batch
             return
 
         for page in page_batch:
-
             assert page._backend is not None
             if not page._backend.is_valid():
                 yield page
@@ -148,18 +154,22 @@ class EasyOcrModel(BaseOcrModel):
                         del im
 
                         cells = [
-                            OcrCell(
-                                id=ix,
+                            TextCell(
+                                index=ix,
                                 text=line[1],
+                                orig=line[1],
+                                from_ocr=True,
                                 confidence=line[2],
-                                bbox=BoundingBox.from_tuple(
-                                    coord=(
-                                        (line[0][0][0] / self.scale) + ocr_rect.l,
-                                        (line[0][0][1] / self.scale) + ocr_rect.t,
-                                        (line[0][2][0] / self.scale) + ocr_rect.l,
-                                        (line[0][2][1] / self.scale) + ocr_rect.t,
-                                    ),
-                                    origin=CoordOrigin.TOPLEFT,
+                                rect=BoundingRectangle.from_bounding_box(
+                                    BoundingBox.from_tuple(
+                                        coord=(
+                                            (line[0][0][0] / self.scale) + ocr_rect.l,
+                                            (line[0][0][1] / self.scale) + ocr_rect.t,
+                                            (line[0][2][0] / self.scale) + ocr_rect.l,
+                                            (line[0][2][1] / self.scale) + ocr_rect.t,
+                                        ),
+                                        origin=CoordOrigin.TOPLEFT,
+                                    )
                                 ),
                             )
                             for ix, line in enumerate(result)
@@ -175,3 +185,7 @@ class EasyOcrModel(BaseOcrModel):
                     self.draw_ocr_rects_and_cells(conv_res, page, ocr_rects)
 
                 yield page
+
+    @classmethod
+    def get_options_type(cls) -> Type[OcrOptions]:
+        return EasyOcrOptions

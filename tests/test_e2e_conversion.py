@@ -6,14 +6,14 @@ from docling.datamodel.document import ConversionResult
 from docling.datamodel.pipeline_options import AcceleratorDevice, PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
+from .test_data_gen_flag import GEN_TEST_DATA
 from .verify_utils import verify_conversion_result_v1, verify_conversion_result_v2
 
-GENERATE_V1 = False
-GENERATE_V2 = False
+GENERATE_V1 = GEN_TEST_DATA
+GENERATE_V2 = GEN_TEST_DATA
 
 
 def get_pdf_paths():
-
     # Define the directory you want to search
     directory = Path("./tests/data/pdf/")
 
@@ -23,7 +23,6 @@ def get_pdf_paths():
 
 
 def get_converter():
-
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = False
     pipeline_options.do_table_structure = True
@@ -33,7 +32,8 @@ def get_converter():
     converter = DocumentConverter(
         format_options={
             InputFormat.PDF: PdfFormatOption(
-                pipeline_options=pipeline_options, backend=DoclingParseDocumentBackend
+                pipeline_options=pipeline_options,
+                backend=DoclingParseDocumentBackend,
             )
         }
     )
@@ -42,7 +42,6 @@ def get_converter():
 
 
 def test_e2e_pdfs_conversions():
-
     pdf_paths = get_pdf_paths()
     converter = get_converter()
 

@@ -1,12 +1,21 @@
 from abc import ABC, abstractmethod
-from typing import Any, Generic, Iterable, Optional
+from collections.abc import Iterable
+from typing import Generic, Optional, Protocol, Type
 
 from docling_core.types.doc import BoundingBox, DocItem, DoclingDocument, NodeItem
 from typing_extensions import TypeVar
 
 from docling.datamodel.base_models import ItemAndImageEnrichmentElement, Page
 from docling.datamodel.document import ConversionResult
+from docling.datamodel.pipeline_options import BaseOptions
 from docling.datamodel.settings import settings
+
+
+class BaseModelWithOptions(Protocol):
+    @classmethod
+    def get_options_type(cls) -> Type[BaseOptions]: ...
+
+    def __init__(self, *, options: BaseOptions, **kwargs): ...
 
 
 class BasePageModel(ABC):
@@ -21,7 +30,6 @@ EnrichElementT = TypeVar("EnrichElementT", default=NodeItem)
 
 
 class GenericEnrichmentModel(ABC, Generic[EnrichElementT]):
-
     elements_batch_size: int = settings.perf.elements_batch_size
 
     @abstractmethod
@@ -42,7 +50,6 @@ class GenericEnrichmentModel(ABC, Generic[EnrichElementT]):
 
 
 class BaseEnrichmentModel(GenericEnrichmentModel[NodeItem]):
-
     def prepare_element(
         self, conv_res: ConversionResult, element: NodeItem
     ) -> Optional[NodeItem]:
@@ -54,7 +61,6 @@ class BaseEnrichmentModel(GenericEnrichmentModel[NodeItem]):
 class BaseItemAndImageEnrichmentModel(
     GenericEnrichmentModel[ItemAndImageEnrichmentElement]
 ):
-
     images_scale: float
     expansion_factor: float = 0.0
 

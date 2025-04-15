@@ -1,23 +1,25 @@
+import hashlib
 import logging
-import math
 import sys
 import time
+from collections.abc import Iterable, Iterator
 from functools import partial
 from pathlib import Path
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple, Type, Union
+from typing import Dict, List, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, ConfigDict, model_validator, validate_call
 
 from docling.backend.abstract_backend import AbstractDocumentBackend
 from docling.backend.asciidoc_backend import AsciiDocBackend
-from docling.backend.docling_parse_v2_backend import DoclingParseV2DocumentBackend
+from docling.backend.csv_backend import CsvDocumentBackend
+from docling.backend.docling_parse_v4_backend import DoclingParseV4DocumentBackend
 from docling.backend.html_backend import HTMLDocumentBackend
 from docling.backend.json.docling_json_backend import DoclingJSONBackend
 from docling.backend.md_backend import MarkdownDocumentBackend
 from docling.backend.msexcel_backend import MsExcelDocumentBackend
 from docling.backend.mspowerpoint_backend import MsPowerpointDocumentBackend
 from docling.backend.msword_backend import MsWordDocumentBackend
-from docling.backend.xml.pubmed_backend import PubMedDocumentBackend
+from docling.backend.xml.jats_backend import JatsDocumentBackend
 from docling.backend.xml.uspto_backend import PatentUsptoDocumentBackend
 from docling.datamodel.base_models import (
     ConversionStatus,
@@ -61,6 +63,11 @@ class FormatOption(BaseModel):
         return self
 
 
+class CsvFormatOption(FormatOption):
+    pipeline_cls: Type = SimplePipeline
+    backend: Type[AbstractDocumentBackend] = CsvDocumentBackend
+
+
 class ExcelFormatOption(FormatOption):
     pipeline_cls: Type = SimplePipeline
     backend: Type[AbstractDocumentBackend] = MsExcelDocumentBackend
@@ -96,23 +103,26 @@ class PatentUsptoFormatOption(FormatOption):
     backend: Type[PatentUsptoDocumentBackend] = PatentUsptoDocumentBackend
 
 
-class XMLPubMedFormatOption(FormatOption):
+class XMLJatsFormatOption(FormatOption):
     pipeline_cls: Type = SimplePipeline
-    backend: Type[AbstractDocumentBackend] = PubMedDocumentBackend
+    backend: Type[AbstractDocumentBackend] = JatsDocumentBackend
 
 
 class ImageFormatOption(FormatOption):
     pipeline_cls: Type = StandardPdfPipeline
-    backend: Type[AbstractDocumentBackend] = DoclingParseV2DocumentBackend
+    backend: Type[AbstractDocumentBackend] = DoclingParseV4DocumentBackend
 
 
 class PdfFormatOption(FormatOption):
     pipeline_cls: Type = StandardPdfPipeline
-    backend: Type[AbstractDocumentBackend] = DoclingParseV2DocumentBackend
+    backend: Type[AbstractDocumentBackend] = DoclingParseV4DocumentBackend
 
 
 def _get_default_option(format: InputFormat) -> FormatOption:
     format_to_default_options = {
+        InputFormat.CSV: FormatOption(
+            pipeline_cls=SimplePipeline, backend=CsvDocumentBackend
+        ),
         InputFormat.XLSX: FormatOption(
             pipeline_cls=SimplePipeline, backend=MsExcelDocumentBackend
         ),
@@ -134,14 +144,14 @@ def _get_default_option(format: InputFormat) -> FormatOption:
         InputFormat.XML_USPTO: FormatOption(
             pipeline_cls=SimplePipeline, backend=PatentUsptoDocumentBackend
         ),
-        InputFormat.XML_PUBMED: FormatOption(
-            pipeline_cls=SimplePipeline, backend=PubMedDocumentBackend
+        InputFormat.XML_JATS: FormatOption(
+            pipeline_cls=SimplePipeline, backend=JatsDocumentBackend
         ),
         InputFormat.IMAGE: FormatOption(
-            pipeline_cls=StandardPdfPipeline, backend=DoclingParseV2DocumentBackend
+            pipeline_cls=StandardPdfPipeline, backend=DoclingParseV4DocumentBackend
         ),
         InputFormat.PDF: FormatOption(
-            pipeline_cls=StandardPdfPipeline, backend=DoclingParseV2DocumentBackend
+            pipeline_cls=StandardPdfPipeline, backend=DoclingParseV4DocumentBackend
         ),
         InputFormat.JSON_DOCLING: FormatOption(
             pipeline_cls=SimplePipeline, backend=DoclingJSONBackend
@@ -162,7 +172,7 @@ class DocumentConverter:
         format_options: Optional[Dict[InputFormat, FormatOption]] = None,
     ):
         self.allowed_formats = (
-            allowed_formats if allowed_formats is not None else [e for e in InputFormat]
+            allowed_formats if allowed_formats is not None else list(InputFormat)
         )
         self.format_to_options = {
             format: (
@@ -172,7 +182,14 @@ class DocumentConverter:
             )
             for format in self.allowed_formats
         }
-        self.initialized_pipelines: Dict[Type[BasePipeline], BasePipeline] = {}
+        self.initialized_pipelines: Dict[
+            Tuple[Type[BasePipeline], str], BasePipeline
+        ] = {}
+
+    def _get_pipeline_options_hash(self, pipeline_options: PipelineOptions) -> str:
+        """Generate a hash of pipeline options to use as part of the cache key."""
+        options_str = str(pipeline_options.model_dump())
+        return hashlib.md5(options_str.encode("utf-8")).hexdigest()
 
     def initialize_pipeline(self, format: InputFormat):
         """Initialize the conversion pipeline for the selected format."""
@@ -237,7 +254,7 @@ class DocumentConverter:
 
         if not had_result and raises_on_error:
             raise ConversionError(
-                f"Conversion failed because the provided file has no recognizable format or it wasn't in the list of allowed formats."
+                "Conversion failed because the provided file has no recognizable format or it wasn't in the list of allowed formats."
             )
 
     def _convert(
@@ -249,7 +266,7 @@ class DocumentConverter:
             conv_input.docs(self.format_to_options),
             settings.perf.doc_batch_size,  # pass format_options
         ):
-            _log.info(f"Going to convert document batch...")
+            _log.info("Going to convert document batch...")
 
             # parallel processing only within input_batch
             # with ThreadPoolExecutor(
@@ -270,31 +287,36 @@ class DocumentConverter:
                 yield item
 
     def _get_pipeline(self, doc_format: InputFormat) -> Optional[BasePipeline]:
+        """Retrieve or initialize a pipeline, reusing instances based on class and options."""
         fopt = self.format_to_options.get(doc_format)
 
-        if fopt is None:
+        if fopt is None or fopt.pipeline_options is None:
             return None
-        else:
-            pipeline_class = fopt.pipeline_cls
-            pipeline_options = fopt.pipeline_options
 
-        if pipeline_options is None:
-            return None
-        # TODO this will ignore if different options have been defined for the same pipeline class.
-        if (
-            pipeline_class not in self.initialized_pipelines
-            or self.initialized_pipelines[pipeline_class].pipeline_options
-            != pipeline_options
-        ):
-            self.initialized_pipelines[pipeline_class] = pipeline_class(
+        pipeline_class = fopt.pipeline_cls
+        pipeline_options = fopt.pipeline_options
+        options_hash = self._get_pipeline_options_hash(pipeline_options)
+
+        # Use a composite key to cache pipelines
+        cache_key = (pipeline_class, options_hash)
+
+        if cache_key not in self.initialized_pipelines:
+            _log.info(
+                f"Initializing pipeline for {pipeline_class.__name__} with options hash {options_hash}"
+            )
+            self.initialized_pipelines[cache_key] = pipeline_class(
                 pipeline_options=pipeline_options
             )
-        return self.initialized_pipelines[pipeline_class]
+        else:
+            _log.debug(
+                f"Reusing cached pipeline for {pipeline_class.__name__} with options hash {options_hash}"
+            )
+
+        return self.initialized_pipelines[cache_key]
 
     def _process_document(
         self, in_doc: InputDocument, raises_on_error: bool
     ) -> ConversionResult:
-
         valid = (
             self.allowed_formats is not None and in_doc.format in self.allowed_formats
         )
@@ -336,7 +358,6 @@ class DocumentConverter:
         else:
             if raises_on_error:
                 raise ConversionError(f"Input document {in_doc.file} is not valid.")
-
             else:
                 # invalid doc or not of desired format
                 conv_res = ConversionResult(
