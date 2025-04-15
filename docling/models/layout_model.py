@@ -23,8 +23,8 @@ _log = logging.getLogger(__name__)
 
 
 class LayoutModel(BasePageModel):
-    _model_repo_folder = "ds4sd--docling-models"
-    _model_path = "model_artifacts/layout"
+    _model_repo_folder = "ds4sd--docling-layout-heron"
+    _model_path = ""
 
     TEXT_ELEM_LABELS = [
         DocItemLabel.TEXT,
