@@ -88,10 +88,12 @@ class LayoutModel(BasePageModel):
         if not progress:
             disable_progress_bars()
         download_path = snapshot_download(
-            repo_id="ds4sd/docling-models",
+            # repo_id="ds4sd/docling-models",
+            repo_id="ds4sd/docling-layout-heron",
             force_download=force,
             local_dir=local_dir,
-            revision="v2.1.0",
+            # revision="v2.1.0",
+            revision="main",
         )
 
         return Path(download_path)
