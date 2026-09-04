@@ -1,6 +1,26 @@
-## Enrich DoclingDocument
-# This example allows to run Docling enrichment models on documents which have been already converted
-# and stored as serialized DoclingDocument JSON files.
+# %% [markdown]
+# Enrich an existing DoclingDocument JSON with a custom model (post-conversion).
+#
+# What this example does
+# - Loads a previously converted DoclingDocument from JSON (no reconversion).
+# - Uses a backend to crop images for items and runs an enrichment model in batches.
+# - Prints a few example annotations to stdout.
+#
+# Prerequisites
+# - A DoclingDocument JSON produced by another conversion (path configured below).
+# - Install Docling and dependencies for the chosen enrichment model.
+# - Ensure the JSON and the referenced PDF match (same document/version), so
+#   provenance bounding boxes line up for accurate cropping.
+#
+# How to run
+# - From the repo root: `python docs/examples/enrich_doclingdocument.py`.
+# - Adjust `input_doc_path` and `input_pdf_path` if your data is elsewhere.
+#
+# Notes
+# - `BATCH_SIZE` controls how many elements are passed to the model at once.
+# - `prepare_element()` crops context around elements based on the model's expansion.
+
+# %%
 
 ### Load modules
 
@@ -15,7 +35,7 @@ from docling.datamodel.accelerator_options import AcceleratorOptions
 from docling.datamodel.base_models import InputFormat, ItemAndImageEnrichmentElement
 from docling.datamodel.document import InputDocument
 from docling.models.base_model import BaseItemAndImageEnrichmentModel
-from docling.models.document_picture_classifier import (
+from docling.models.stages.picture_classifier.document_picture_classifier import (
     DocumentPictureClassifier,
     DocumentPictureClassifierOptions,
 )
@@ -24,6 +44,7 @@ from docling.utils.utils import chunkify
 ### Define batch size used for processing
 
 BATCH_SIZE = 4
+# Trade-off: larger batches improve throughput but increase memory usage.
 
 ### From DocItem to the model inputs
 # The following function is responsible for taking an item and applying the required pre-processing for the model.
@@ -100,9 +121,9 @@ def enrich_document(
 
 def main():
     data_folder = Path(__file__).parent / "../../tests/data"
-    input_pdf_path = data_folder / "pdf/2206.01062.pdf"
+    input_pdf_path = data_folder / "pdf/sources/2206.01062.pdf"
 
-    input_doc_path = data_folder / "groundtruth/docling_v2/2206.01062.json"
+    input_doc_path = data_folder / "pdf/groundtruth/2206.01062.json"
 
     doc = DoclingDocument.load_from_json(input_doc_path)
 
@@ -117,7 +138,9 @@ def main():
     model = DocumentPictureClassifier(
         enabled=True,
         artifacts_path=None,
-        options=DocumentPictureClassifierOptions(),
+        options=DocumentPictureClassifierOptions.from_preset(
+            "document_figure_classifier_v2"
+        ),
         accelerator_options=AcceleratorOptions(),
     )
 
@@ -125,7 +148,7 @@ def main():
 
     for pic in doc.pictures[:5]:
         print(pic.self_ref)
-        pprint(pic.annotations)
+        pprint(pic.meta)
 
 
 if __name__ == "__main__":

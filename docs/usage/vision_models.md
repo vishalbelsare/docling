@@ -1,4 +1,6 @@
 
+# Vision Models
+
 The `VlmPipeline` in Docling allows you to convert documents end-to-end using a vision-language model.
 
 Docling supports vision-language models which output:
@@ -6,6 +8,11 @@ Docling supports vision-language models which output:
 - DocTags (e.g. [SmolDocling](https://huggingface.co/ds4sd/SmolDocling-256M-preview)), the preferred choice
 - Markdown
 - HTML
+
+!!! tip "Complete Model Catalog"
+    For a comprehensive overview of **all models and stages** in Docling (Layout, Table Structure, OCR, VLM, etc.), see the **[Model Catalog](model_catalog.md)**.
+
+## Quick Start
 
 
 For running Docling using local models with the `VlmPipeline`:
@@ -45,12 +52,16 @@ The following table reports the models currently available out-of-the-box.
 
 | Model instance | Model | Framework | Device | Num pages | Inference time (sec) |
 | ---------------|------ | --------- | ------ | --------- | ---------------------|
+| `vlm_model_specs.GRANITEDOCLING_TRANSFORMERS` | [ibm-granite/granite-docling-258M](https://huggingface.co/ibm-granite/granite-docling-258M) | `Transformers/AutoModelForVision2Seq` | MPS | 1 |  - |
+| `vlm_model_specs.GRANITEDOCLING_MLX` | [ibm-granite/granite-docling-258M-mlx-bf16](https://huggingface.co/ibm-granite/granite-docling-258M-mlx-bf16) | `MLX`| MPS | 1 |    - |
 | `vlm_model_specs.SMOLDOCLING_TRANSFORMERS` | [ds4sd/SmolDocling-256M-preview](https://huggingface.co/ds4sd/SmolDocling-256M-preview) | `Transformers/AutoModelForVision2Seq` | MPS | 1 |  102.212 |
 | `vlm_model_specs.SMOLDOCLING_MLX` | [ds4sd/SmolDocling-256M-preview-mlx-bf16](https://huggingface.co/ds4sd/SmolDocling-256M-preview-mlx-bf16) | `MLX`| MPS | 1 |    6.15453 |
 | `vlm_model_specs.QWEN25_VL_3B_MLX` | [mlx-community/Qwen2.5-VL-3B-Instruct-bf16](https://huggingface.co/mlx-community/Qwen2.5-VL-3B-Instruct-bf16)  |  `MLX`| MPS | 1 |   23.4951 |
+| `vlm_model_specs.NANONETS_OCR2_MLX` | [mlx-community/Nanonets-OCR2-3B-bf16](https://huggingface.co/mlx-community/Nanonets-OCR2-3B-bf16) | `MLX` | MPS | 1 | - |
 | `vlm_model_specs.PIXTRAL_12B_MLX` | [mlx-community/pixtral-12b-bf16](https://huggingface.co/mlx-community/pixtral-12b-bf16) |  `MLX` | MPS | 1 |  308.856 |
 | `vlm_model_specs.GEMMA3_12B_MLX` | [mlx-community/gemma-3-12b-it-bf16](https://huggingface.co/mlx-community/gemma-3-12b-it-bf16) |  `MLX` | MPS | 1 |  378.486 |
 | `vlm_model_specs.GRANITE_VISION_TRANSFORMERS` | [ibm-granite/granite-vision-3.2-2b](https://huggingface.co/ibm-granite/granite-vision-3.2-2b) | `Transformers/AutoModelForVision2Seq` | MPS | 1 |  104.75 |
+| `vlm_model_specs.NANONETS_OCR2_TRANSFORMERS` | [nanonets/Nanonets-OCR2-3B](https://huggingface.co/nanonets/Nanonets-OCR2-3B) | `Transformers/AutoModelForImageTextToText` | MPS | 1 | - |
 | `vlm_model_specs.PHI4_TRANSFORMERS` | [microsoft/Phi-4-multimodal-instruct](https://huggingface.co/microsoft/Phi-4-multimodal-instruct) | `Transformers/AutoModelForCasualLM` | CPU | 1 | 1175.67 |
 | `vlm_model_specs.PIXTRAL_12B_TRANSFORMERS` | [mistral-community/pixtral-12b](https://huggingface.co/mistral-community/pixtral-12b) | `Transformers/AutoModelForVision2Seq` | CPU | 1 | 1828.21 |
 
@@ -103,6 +114,7 @@ pipeline_options = VlmPipelineOptions(
             AcceleratorDevice.CPU,
             AcceleratorDevice.CUDA,
             AcceleratorDevice.MPS,
+            AcceleratorDevice.XPU,
         ],
         scale=2.0,
         temperature=0.0,

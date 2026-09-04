@@ -1,4 +1,31 @@
+# %% [markdown]
+# Export page, figure, and table images from a PDF and save rich outputs.
+#
+# What this example does
+# - Converts a PDF, keeps page/element images, and writes them to `scratch/`.
+# - Exports Markdown and HTML with either embedded or referenced images.
+#
+# Prerequisites
+# - Install Docling and image dependencies. Pillow is used for image saves
+#   (`pip install pillow`) if not already available via Docling's deps.
+# - Ensure you can import `docling` from your Python environment.
+#
+# How to run
+# - From the repo root: `python docs/examples/export_figures.py`.
+# - Outputs (PNG, MD, HTML) are written to `scratch/`.
+#
+# Key options
+# - `IMAGE_RESOLUTION_SCALE`: increase to render higher-resolution images (e.g., 2.0).
+# - `PdfPipelineOptions.generate_page_images`/`generate_picture_images`: preserve images for export.
+# - `ImageRefMode`: choose `EMBEDDED` or `REFERENCED` when saving Markdown/HTML.
+#
+# Input document
+# - Defaults to `tests/data/pdf/sources/2206.01062.pdf`. Change `input_doc_path` as needed.
+
+# %%
+
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -6,9 +33,15 @@ from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
 
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.settings import DEFAULT_PAGE_RANGE
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
 _log = logging.getLogger(__name__)
+
+# Under CI we limit the conversion to a representative page range to keep the
+# example fast; locally the full document is processed.
+IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+CI_PAGE_RANGE = (3, 4)
 
 IMAGE_RESOLUTION_SCALE = 2.0
 
@@ -17,15 +50,12 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     data_folder = Path(__file__).parent / "../../tests/data"
-    input_doc_path = data_folder / "pdf/2206.01062.pdf"
+    input_doc_path = data_folder / "pdf/sources/2206.01062.pdf"
     output_dir = Path("scratch")
 
-    # Important: For operating with page images, we must keep them, otherwise the DocumentConverter
-    # will destroy them for cleaning up memory.
-    # This is done by setting PdfPipelineOptions.images_scale, which also defines the scale of images.
-    # scale=1 correspond of a standard 72 DPI image
-    # The PdfPipelineOptions.generate_* are the selectors for the document elements which will be enriched
-    # with the image field
+    # Keep page/element images so they can be exported. The `images_scale` controls
+    # the rendered image resolution (scale=1 ~ 72 DPI). The `generate_*` toggles
+    # decide which elements are enriched with images.
     pipeline_options = PdfPipelineOptions()
     pipeline_options.images_scale = IMAGE_RESOLUTION_SCALE
     pipeline_options.generate_page_images = True
@@ -39,7 +69,8 @@ def main():
 
     start_time = time.time()
 
-    conv_res = doc_converter.convert(input_doc_path)
+    page_range = CI_PAGE_RANGE if IS_CI else DEFAULT_PAGE_RANGE
+    conv_res = doc_converter.convert(input_doc_path, page_range=page_range)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     doc_filename = conv_res.input.file.stem

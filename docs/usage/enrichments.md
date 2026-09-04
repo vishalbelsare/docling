@@ -16,7 +16,7 @@ The following table provides an overview of the default enrichment models availa
 
 ### Code understanding
 
-The code understanding step allows to use advance parsing for code blocks found in the document.
+The code understanding step allows to use advanced parsing for code blocks found in the document.
 This enrichment model also set the `code_language` property of the `CodeItem`.
 
 Model specs: see the [`CodeFormula` model card](https://huggingface.co/ds4sd/CodeFormula).
@@ -47,7 +47,7 @@ doc = result.document
 
 ### Formula understanding
 
-The formula understanding step will analize the equation formulas in documents and extract their LaTeX representation.
+The formula understanding step will analyze the equation formulas in documents and extract their LaTeX representation.
 The HTML export functions in the DoclingDocument will leverage the formula and visualize the result using the mathml html syntax.
 
 Model specs: see the [`CodeFormula` model card](https://huggingface.co/ds4sd/CodeFormula).
@@ -82,7 +82,7 @@ The picture classification step classifies the `PictureItem` elements in the doc
 This model is specialized to understand the classes of pictures found in documents, e.g. different chart types, flow diagrams,
 logos, signatures, etc.
 
-Model specs: see the [`DocumentFigureClassifier` model card](https://huggingface.co/ds4sd/DocumentFigureClassifier).
+Model specs: see the [`DocumentFigureClassifier-v2.5` model card](https://huggingface.co/docling-project/DocumentFigureClassifier-v2.5).
 
 Example command line:
 
@@ -168,7 +168,7 @@ from docling.datamodel.pipeline_options import PictureDescriptionVlmOptions
 
 pipeline_options.picture_description_options = PictureDescriptionVlmOptions(
     repo_id="",  # <-- add here the Hugging Face repo_id of your favorite VLM
-    prompt="Describe the image in three sentences. Be consise and accurate.",
+    prompt="Describe the image in three sentences. Be concise and accurate.",
 )
 ```
 
@@ -197,7 +197,7 @@ pipeline_options.picture_description_options = PictureDescriptionApiOptions(
         seed=42,
         max_completion_tokens=200,
     ),
-    prompt="Describe the image in three sentences. Be consise and accurate.",
+    prompt="Describe the image in three sentences. Be concise and accurate.",
     timeout=90,
 )
 ```
@@ -206,10 +206,34 @@ End-to-end code snippets for cloud providers are available in the examples secti
 
 - [IBM watsonx.ai](../examples/pictures_description_api.py)
 
+#### Capturing API usage metadata
+
+`PictureDescriptionApiOptions` can preserve a raw usage payload from the API response on each generated picture description. By default, Docling reads the `usage` field from OpenAI-compatible chat-completions responses.
+
+Set `usage_response_key` to another JSON key or dotted path when your provider returns usage data elsewhere, for example `providerUsage` or `meta.usage`.
+
+```py
+pipeline_options.picture_description_options = PictureDescriptionApiOptions(
+    url="https://example.com/v1/chat/completions",
+    headers={"Authorization": "Bearer ..."},
+    params={"model": "my-vision-model"},
+    prompt="Describe the image.",
+    usage_response_key="usage",
+)
+```
+
+The payload is stored on the picture description metadata:
+
+```py
+usage = picture.meta.description.get_custom_part()["docling__usage"]
+```
+
+See the [API usage capture example](../examples/picture_description_api_usage.py) for an end-to-end script, including Azure OpenAI endpoint construction.
+
 
 ## Develop new enrichment models
 
-Beside looking at the implementation of all the models listed above, the Docling documentation has a few examples
+Besides looking at the implementation of all the models listed above, the Docling documentation has a few examples
 dedicated to the implementation of enrichment models.
 
 - [Develop picture enrichment](../examples/develop_picture_enrichment.py)

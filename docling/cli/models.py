@@ -1,14 +1,38 @@
+# SPDX-FileCopyrightText: The Docling Contributors
+# SPDX-License-Identifier: MIT
+
 import logging
+import sys
 import warnings
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
 
-import typer
-from rich.console import Console
-from rich.logging import RichHandler
+# Check for CLI dependencies
+try:
+    import typer
+    from rich.console import Console
+    from rich.logging import RichHandler
+except ImportError as e:
+    missing_package = str(e).split("'")[1] if "'" in str(e) else "typer or rich"
+    print(
+        f"Error: Missing required CLI dependency '{missing_package}'", file=sys.stderr
+    )
+    print("\nThe docling-tools CLI requires additional dependencies.", file=sys.stderr)
+    print("Please install them using one of the following options:\n", file=sys.stderr)
+    print("  1. Install the full docling package (recommended):", file=sys.stderr)
+    print("     pip install docling\n", file=sys.stderr)
+    print("  2. Install docling-slim with CLI support:", file=sys.stderr)
+    print("     pip install docling-slim[cli]\n", file=sys.stderr)
+    print("  3. Install just the missing dependencies:", file=sys.stderr)
+    print("     pip install typer rich\n", file=sys.stderr)
+    sys.exit(1)
 
 from docling.datamodel.settings import settings
+from docling.models.stages.ocr.easyocr_model import (
+    _resolve_easyocr_recognition_models,
+)
+from docling.models.stages.ocr.rapid_ocr_model import _parse_rapidocr_model_spec
 from docling.models.utils.hf_model_download import download_hf_model
 from docling.utils.model_downloader import download_models
 
@@ -30,13 +54,20 @@ app = typer.Typer(
 class _AvailableModels(str, Enum):
     LAYOUT = "layout"
     TABLEFORMER = "tableformer"
+    TABLEFORMERV2 = "tableformerv2"
     CODE_FORMULA = "code_formula"
     PICTURE_CLASSIFIER = "picture_classifier"
     SMOLVLM = "smolvlm"
+    GRANITEDOCLING = "granitedocling"
+    GRANITEDOCLING_MLX = "granitedocling_mlx"
     SMOLDOCLING = "smoldocling"
     SMOLDOCLING_MLX = "smoldocling_mlx"
     GRANITE_VISION = "granite_vision"
+    GRANITE_CHART_EXTRACTION = "granite_chart_extraction"
+    GRANITE_CHART_EXTRACTION_V4 = "granite_chart_extraction_v4"
+    RAPIDOCR = "rapidocr"
     EASYOCR = "easyocr"
+    NEMOTRON_OCR_V2 = "nemotron_ocr_v2"
 
 
 _default_models = [
@@ -44,7 +75,7 @@ _default_models = [
     _AvailableModels.TABLEFORMER,
     _AvailableModels.CODE_FORMULA,
     _AvailableModels.PICTURE_CLASSIFIER,
-    _AvailableModels.EASYOCR,
+    _AvailableModels.RAPIDOCR,
 ]
 
 
@@ -86,6 +117,25 @@ def download(
             help="No extra output is generated, the CLI prints only the directory with the cached models.",
         ),
     ] = False,
+    easyocr_lang: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            ...,
+            "--easyocr-lang",
+            help="EasyOCR language code to prefetch. Repeat for multiple languages.",
+        ),
+    ] = None,
+    rapidocr_backend_lang: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            ...,
+            "--rapidocr-backend-lang",
+            help=(
+                "RapidOCR checkpoint set to prefetch, as '<backend>:<lang>' "
+                "(e.g. 'onnxruntime:el', 'torch:korean'). Repeat for multiple. Replaces the default set."
+            ),
+        ),
+    ] = None,
 ):
     if models and all:
         raise typer.BadParameter(
@@ -99,19 +149,53 @@ def download(
             handlers=[RichHandler(show_level=False, show_time=False, markup=True)],
         )
     to_download = models or (list(_AvailableModels) if all else _default_models)
+    if easyocr_lang is not None:
+        if _AvailableModels.EASYOCR not in to_download:
+            raise typer.BadParameter(
+                "--easyocr-lang requires the 'easyocr' model",
+                param_hint="--easyocr-lang",
+            )
+        try:
+            _resolve_easyocr_recognition_models(easyocr_lang)
+        except ValueError as error:
+            raise typer.BadParameter(str(error), param_hint="--easyocr-lang") from error
+    if rapidocr_backend_lang is not None:
+        if _AvailableModels.RAPIDOCR not in to_download:
+            raise typer.BadParameter(
+                "--rapidocr-backend-lang requires the 'rapidocr' model",
+                param_hint="--rapidocr-backend-lang",
+            )
+        try:
+            for value in rapidocr_backend_lang:
+                _parse_rapidocr_model_spec(value)
+        except ValueError as error:
+            raise typer.BadParameter(
+                str(error), param_hint="--rapidocr-backend-lang"
+            ) from error
     output_dir = download_models(
         output_dir=output_dir,
         force=force,
         progress=(not quiet),
         with_layout=_AvailableModels.LAYOUT in to_download,
         with_tableformer=_AvailableModels.TABLEFORMER in to_download,
+        with_tableformer_v2=_AvailableModels.TABLEFORMERV2 in to_download,
         with_code_formula=_AvailableModels.CODE_FORMULA in to_download,
         with_picture_classifier=_AvailableModels.PICTURE_CLASSIFIER in to_download,
         with_smolvlm=_AvailableModels.SMOLVLM in to_download,
+        with_granitedocling=_AvailableModels.GRANITEDOCLING in to_download,
+        with_granitedocling_mlx=_AvailableModels.GRANITEDOCLING_MLX in to_download,
         with_smoldocling=_AvailableModels.SMOLDOCLING in to_download,
         with_smoldocling_mlx=_AvailableModels.SMOLDOCLING_MLX in to_download,
         with_granite_vision=_AvailableModels.GRANITE_VISION in to_download,
+        with_granite_chart_extraction=_AvailableModels.GRANITE_CHART_EXTRACTION
+        in to_download,
+        with_granite_chart_extraction_v4=_AvailableModels.GRANITE_CHART_EXTRACTION_V4
+        in to_download,
+        with_rapidocr=_AvailableModels.RAPIDOCR in to_download,
+        rapidocr_models=rapidocr_backend_lang,
         with_easyocr=_AvailableModels.EASYOCR in to_download,
+        easyocr_languages=easyocr_lang,
+        with_nemotron_ocr=_AvailableModels.NEMOTRON_OCR_V2 in to_download,
     )
 
     if quiet:
@@ -134,7 +218,7 @@ def download_hf_repo(
     models: Annotated[
         list[str],
         typer.Argument(
-            help="Specific models to download from HuggingFace identified by their repo id. For example: ds4sd/docling-models .",
+            help="Specific models to download from HuggingFace identified by their repo id. For example: docling-project/docling-models .",
         ),
     ],
     output_dir: Annotated[
@@ -168,7 +252,8 @@ def download_hf_repo(
         )
 
     for item in models:
-        typer.secho(f"\nDownloading {item} model from HuggingFace...")
+        if not quiet:
+            typer.secho(f"\nDownloading {item} model from HuggingFace...")
         download_hf_model(
             repo_id=item,
             # would be better to reuse "repo_cache_folder" property: https://github.com/docling-project/docling/blob/main/docling/datamodel/pipeline_options_vlm_model.py#L76

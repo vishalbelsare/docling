@@ -1,19 +1,24 @@
+# SPDX-FileCopyrightText: The Docling Contributors
+# SPDX-License-Identifier: MIT
+
 from abc import abstractmethod
 from collections.abc import Iterable
 from pathlib import Path
-from typing import List, Optional, Type, Union
+from typing import Any, List, Optional, Type, Union
 
 from docling_core.types.doc import (
+    DescriptionMetaField,
     DoclingDocument,
     NodeItem,
+    PictureClassificationLabel,
     PictureItem,
+    PictureMeta,
 )
-from docling_core.types.doc.document import (  # TODO: move import to docling_core.types.doc
-    PictureDescriptionData,
-)
+from docling_core.types.doc.document import PictureDescriptionData
 from PIL import Image
 
 from docling.datamodel.accelerator_options import AcceleratorOptions
+from docling.datamodel.base_models import ApiImageRequestResult
 from docling.datamodel.pipeline_options import (
     PictureDescriptionBaseOptions,
 )
@@ -22,6 +27,9 @@ from docling.models.base_model import (
     BaseModelWithOptions,
     ItemAndImageEnrichmentElement,
 )
+
+_USAGE_META_NAMESPACE = "docling"
+_USAGE_META_FIELD_NAME = "usage"
 
 
 class PictureDescriptionBaseModel(
@@ -38,14 +46,23 @@ class PictureDescriptionBaseModel(
         options: PictureDescriptionBaseOptions,
         accelerator_options: AcceleratorOptions,
     ):
+        if options.batch_size < 1:
+            raise ValueError("Picture description batch_size must be >= 1")
+        if options.scale <= 0:
+            raise ValueError("Picture description scale must be > 0")
+
         self.enabled = enabled
         self.options = options
         self.provenance = "not-implemented"
+        self.elements_batch_size = options.batch_size
+        self.images_scale = options.scale
 
     def is_processable(self, doc: DoclingDocument, element: NodeItem) -> bool:
         return self.enabled and isinstance(element, PictureItem)
 
-    def _annotate_images(self, images: Iterable[Image.Image]) -> Iterable[str]:
+    def _annotate_images(
+        self, images: Iterable[Image.Image]
+    ) -> Iterable[str | ApiImageRequestResult]:
         raise NotImplementedError
 
     def __call__(
@@ -73,19 +90,94 @@ class PictureDescriptionBaseModel(
                         area_fraction = prov.bbox.area() / page_area
                         if area_fraction < self.options.picture_area_threshold:
                             describe_image = False
+            if describe_image and not _passes_classification(
+                el.item.meta,
+                self.options.classification_allow,
+                self.options.classification_deny,
+                self.options.classification_min_confidence,
+            ):
+                describe_image = False
             if describe_image:
                 elements.append(el.item)
-                images.append(el.image)
+                images.append(el.image.convert("RGB"))
 
         outputs = self._annotate_images(images)
 
         for item, output in zip(elements, outputs):
-            item.annotations.append(
-                PictureDescriptionData(text=output, provenance=self.provenance)
+            description_text, usage = _normalize_description_output(output)
+            # FIXME: annotations is deprecated, remove once all consumers use meta.classification
+            if self.options._keep_deprecated_annotations:
+                item.annotations.append(
+                    PictureDescriptionData(
+                        text=description_text, provenance=self.provenance
+                    )
+                )
+
+            # Store description in the new meta field
+            if item.meta is None:
+                item.meta = PictureMeta()
+            item.meta.description = DescriptionMetaField(
+                text=description_text,
+                created_by=self.provenance,
             )
+            if usage is not None:
+                item.meta.description.set_custom_field(
+                    namespace=_USAGE_META_NAMESPACE,
+                    name=_USAGE_META_FIELD_NAME,
+                    value=usage,
+                )
+
             yield item
 
     @classmethod
     @abstractmethod
     def get_options_type(cls) -> Type[PictureDescriptionBaseOptions]:
         pass
+
+
+def _normalize_description_output(
+    output: str | ApiImageRequestResult,
+) -> tuple[str, Any | None]:
+    if isinstance(output, ApiImageRequestResult):
+        return output.text, output.usage
+    return output, None
+
+
+def _passes_classification(
+    meta: Optional[PictureMeta],
+    allow: Optional[List[PictureClassificationLabel]],
+    deny: Optional[List[PictureClassificationLabel]],
+    min_confidence: float,
+) -> bool:
+    if not allow and not deny:
+        return True
+    predicted = None
+    if meta and meta.classification:
+        predicted = meta.classification.predictions
+    if not predicted:
+        return allow is None
+    if deny:
+        deny_set = {_label_value(label) for label in deny}
+        for entry in predicted:
+            if _meets_confidence(entry.confidence, min_confidence) and (
+                entry.class_name in deny_set
+            ):
+                return False
+    if allow:
+        allow_set = {_label_value(label) for label in allow}
+        return any(
+            _meets_confidence(entry.confidence, min_confidence)
+            and entry.class_name in allow_set
+            for entry in predicted
+        )
+    return True
+
+
+def _label_value(label: Union[PictureClassificationLabel, str]) -> str:
+    return label.value if isinstance(label, PictureClassificationLabel) else str(label)
+
+
+def _meets_confidence(confidence: Optional[float], min_confidence: float) -> bool:
+    return min_confidence <= 0 or (
+        confidence is not None and confidence >= min_confidence
+    )

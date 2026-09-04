@@ -1,13 +1,40 @@
+# %% [markdown]
+# Translate extracted text content and regenerate Markdown with embedded images.
+#
+# What this example does
+# - Converts a PDF and saves original Markdown with embedded images.
+# - Translates text elements and table cell contents, then saves a translated Markdown.
+#
+# Prerequisites
+# - Install Docling. Add a translation library of your choice inside `translate()`.
+#
+# How to run
+# - From the repo root: `python docs/examples/translate.py`.
+# - The script writes original and translated Markdown to `scratch/`.
+#
+# Notes
+# - `translate()` is a placeholder; integrate your preferred translation API/client.
+# - Image generation is enabled to preserve embedded images in the output.
+
+# %%
+
 import logging
+import os
 from pathlib import Path
 
 from docling_core.types.doc import ImageRefMode, TableItem, TextItem
 
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
+from docling.datamodel.settings import DEFAULT_PAGE_RANGE
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
 _log = logging.getLogger(__name__)
+
+# Under CI we limit the conversion to a representative page range to keep the
+# example fast; locally the full document is processed.
+IS_CI = os.environ.get("CI", "").lower() in ("true", "1", "yes")
+CI_PAGE_RANGE = (3, 4)
 
 IMAGE_RESOLUTION_SCALE = 2.0
 
@@ -31,8 +58,9 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     data_folder = Path(__file__).parent / "../../tests/data"
-    input_doc_path = data_folder / "pdf/2206.01062.pdf"
-    output_dir = Path("scratch")
+    input_doc_path = data_folder / "pdf/sources/2206.01062.pdf"
+    output_dir = Path("scratch")  # ensure this directory exists before saving
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # Important: For operating with page images, we must keep them, otherwise the DocumentConverter
     # will destroy them for cleaning up memory.
@@ -51,11 +79,13 @@ def main():
         }
     )
 
-    conv_res = doc_converter.convert(input_doc_path)
+    page_range = CI_PAGE_RANGE if IS_CI else DEFAULT_PAGE_RANGE
+    conv_res = doc_converter.convert(input_doc_path, page_range=page_range)
     conv_doc = conv_res.document
-    doc_filename = conv_res.input.file
+    doc_filename = conv_res.input.file.name
 
     # Save markdown with embedded pictures in original text
+    # Tip: create the `scratch/` folder first or adjust `output_dir`.
     md_filename = output_dir / f"{doc_filename}-with-images-orig.md"
     conv_doc.save_as_markdown(md_filename, image_mode=ImageRefMode.EMBEDDED)
 
@@ -66,8 +96,12 @@ def main():
 
         elif isinstance(element, TableItem):
             for cell in element.data.table_cells:
-                cell.text = translate(text=element.text)
+                cell.text = translate(text=cell.text)
 
     # Save markdown with embedded pictures in translated text
     md_filename = output_dir / f"{doc_filename}-with-images-translated.md"
     conv_doc.save_as_markdown(md_filename, image_mode=ImageRefMode.EMBEDDED)
+
+
+if __name__ == "__main__":
+    main()

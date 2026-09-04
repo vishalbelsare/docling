@@ -1,17 +1,44 @@
+# SPDX-FileCopyrightText: The Docling Contributors
+# SPDX-License-Identifier: MIT
+
 import csv
 import logging
 import warnings
+from collections.abc import Callable
 from io import BytesIO, StringIO
 from pathlib import Path
-from typing import Set, Union
+from typing import Final, Set, Union
 
 from docling_core.types.doc import DoclingDocument, DocumentOrigin, TableCell, TableData
 
 from docling.backend.abstract_backend import DeclarativeDocumentBackend
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import InputDocument
+from docling.exceptions import DocumentLoadError
 
 _log = logging.getLogger(__name__)
+
+# Characters of the file handed to csv.Sniffer when the first line alone
+# cannot be sniffed.
+_SNIFF_SAMPLE_SIZE: Final[int] = 4096
+_DELIMITERS: Final[str] = ",;\t|:"
+
+
+def _sniff_dialect(head: str, read_sample: Callable[[], str]) -> type[csv.Dialect]:
+    """Detect the dialect from the first line, falling back to a larger sample.
+
+    The first line is enough for most files and is what the sniffer reads best:
+    it rejects samples whose rows hold different numbers of delimiters. It is
+    not enough when a quoted field spans several lines, because the line is cut
+    mid-quote; retrying with a sample that closes the quote recovers those.
+    `read_sample` is only called on that fallback path.
+
+    Raises csv.Error if neither can be detected.
+    """
+    try:
+        return csv.Sniffer().sniff(head, _DELIMITERS)
+    except csv.Error:
+        return csv.Sniffer().sniff(read_sample(), _DELIMITERS)
 
 
 class CsvDocumentBackend(DeclarativeDocumentBackend):
@@ -20,15 +47,20 @@ class CsvDocumentBackend(DeclarativeDocumentBackend):
     def __init__(self, in_doc: "InputDocument", path_or_stream: Union[BytesIO, Path]):
         super().__init__(in_doc, path_or_stream)
 
-        # Load content
+        # Load content. utf-8-sig drops a leading BOM, which Excel and Google
+        # Sheets both write when exporting "CSV UTF-8"; left in, it becomes part
+        # of the first header cell. It is equivalent to utf-8 when no BOM is
+        # present.
         try:
             if isinstance(self.path_or_stream, BytesIO):
-                self.content = StringIO(self.path_or_stream.getvalue().decode("utf-8"))
+                self.content = StringIO(
+                    self.path_or_stream.getvalue().decode("utf-8-sig")
+                )
             elif isinstance(self.path_or_stream, Path):
-                self.content = StringIO(self.path_or_stream.read_text("utf-8"))
+                self.content = StringIO(self.path_or_stream.read_text("utf-8-sig"))
             self.valid = True
         except Exception as e:
-            raise RuntimeError(
+            raise DocumentLoadError(
                 f"CsvDocumentBackend could not load document with hash {self.document_hash}"
             ) from e
         return
@@ -54,30 +86,34 @@ class CsvDocumentBackend(DeclarativeDocumentBackend):
         Parses the CSV data into a structured document model.
         """
 
-        # Detect CSV dialect
+        # Detect CSV dialect. The larger sample is only read when the first
+        # line fails to sniff.
         head = self.content.readline()
-        dialect = csv.Sniffer().sniff(head, ",;\t|:")
-        _log.info(f'Parsing CSV with delimiter: "{dialect.delimiter}"')
-        if dialect.delimiter not in {",", ";", "\t", "|", ":"}:
-            raise RuntimeError(
-                f"Cannot convert csv with unknown delimiter {dialect.delimiter}."
-            )
 
-        # Parce CSV
+        def read_sample() -> str:
+            self.content.seek(0)
+            return self.content.read(_SNIFF_SAMPLE_SIZE)
+
+        try:
+            dialect: type[csv.Dialect] = _sniff_dialect(head, read_sample)
+            if dialect.delimiter not in _DELIMITERS:
+                raise RuntimeError(
+                    f"Cannot convert csv with unknown delimiter {dialect.delimiter}."
+                )
+            else:
+                _log.info(f'Parsing CSV with delimiter: "{dialect.delimiter}"')
+        except csv.Error as e:
+            # Fall back to default commad delimiter (e.g. single-column, insufficient data to detect)
+            _log.info(
+                f"Could not detect delimiter ({e}), using default comma delimiter"
+            )
+            dialect = csv.excel
+
+        # Parse CSV
         self.content.seek(0)
         result = csv.reader(self.content, dialect=dialect, strict=True)
         self.csv_data = list(result)
         _log.info(f"Detected {len(self.csv_data)} lines")
-
-        # Ensure uniform column length
-        expected_length = len(self.csv_data[0])
-        is_uniform = all(len(row) == expected_length for row in self.csv_data)
-        if not is_uniform:
-            warnings.warn(
-                f"Inconsistent column lengths detected in CSV data. "
-                f"Expected {expected_length} columns, but found rows with varying lengths. "
-                f"Ensure all rows have the same number of columns."
-            )
 
         # Parse the CSV into a structured document model
         origin = DocumentOrigin(
@@ -90,7 +126,18 @@ class CsvDocumentBackend(DeclarativeDocumentBackend):
 
         if self.is_valid():
             # Convert CSV data to table
-            if self.csv_data:
+            if not self.csv_data:
+                _log.warning("CSV file is empty, returning empty document.")
+            else:
+                expected_length = len(self.csv_data[0])
+                is_uniform = all(len(row) == expected_length for row in self.csv_data)
+                if not is_uniform:
+                    warnings.warn(
+                        f"Inconsistent column lengths detected in CSV data. "
+                        f"Expected {expected_length} columns, but found rows with varying lengths. "
+                        f"Ensure all rows have the same number of columns."
+                    )
+
                 num_rows = len(self.csv_data)
                 num_cols = max(len(row) for row in self.csv_data)
 

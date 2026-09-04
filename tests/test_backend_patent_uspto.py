@@ -1,7 +1,11 @@
+# SPDX-FileCopyrightText: The Docling Contributors
+# SPDX-License-Identifier: MIT
+
 """Test methods in module docling.backend.patent_uspto_backend.py."""
 
 import logging
 import os
+from io import BytesIO
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -17,8 +21,31 @@ from .test_data_gen_flag import GEN_TEST_DATA
 from .verify_utils import CONFID_PREC, COORD_PREC, verify_document
 
 GENERATE: bool = GEN_TEST_DATA
-DATA_PATH: Path = Path("./tests/data/uspto/")
-GT_PATH: Path = Path("./tests/data/groundtruth/docling_v2/")
+DATA_PATH: Path = Path("./tests/data/uspto/sources/")
+GT_PATH: Path = Path("./tests/data/uspto/groundtruth/")
+
+
+def test_patent_uspto_grant_aps_accepts_crlf_bytesio(tmp_path: Path) -> None:
+    source = DATA_PATH / "pftaps057006474.txt"
+    content = b"\r\n".join(source.read_bytes().splitlines()) + b"\r\n"
+    path = tmp_path / "pftaps057006474.txt"
+    path.write_bytes(content)
+
+    in_doc = InputDocument(
+        path_or_stream=path,
+        format=InputFormat.XML_USPTO,
+        backend=PatentUsptoDocumentBackend,
+    )
+    stream_backend = PatentUsptoDocumentBackend(
+        in_doc=in_doc,
+        path_or_stream=BytesIO(content),
+    )
+
+    assert stream_backend.is_valid()
+
+    stream_document = stream_backend.convert()
+    assert len(stream_document.texts) == 75
+    assert stream_document.texts[0].text == "Carbocation containing cyanine-type dye"
 
 
 def _generate_groundtruth(doc: DoclingDocument, file_stem: str) -> None:
@@ -29,7 +56,7 @@ def _generate_groundtruth(doc: DoclingDocument, file_stem: str) -> None:
         coord_precision=COORD_PREC,
         confid_precision=CONFID_PREC,
     )
-    doc.save_as_markdown(GT_PATH / f"{file_stem}.md")
+    doc.save_as_markdown(GT_PATH / f"{file_stem}.md", compact_tables=True)
 
 
 @pytest.fixture(scope="module")
@@ -116,7 +143,7 @@ def test_patent_groundtruth(patents, groundtruth):
             continue
         md_name = path.stem + ".md"
         if md_name in gt_names:
-            pred_md = doc.export_to_markdown()
+            pred_md = doc.export_to_markdown(compact_tables=True)
             assert pred_md == gt_names[md_name], (
                 f"Markdown file mismatch against groundtruth {md_name}"
             )
@@ -141,6 +168,29 @@ def test_tables(tables):
     assert file_table.num_rows == 13
     assert file_table.num_cols == 10
     assert len(file_table.table_cells) == 130
+
+
+def test_table_out_of_range_namest_does_not_crash():
+    """An entry whose numeric namest points past the declared columns must degrade, not crash."""
+    xml = (
+        '<table><tgroup cols="2">'
+        '<colspec colname="1" colwidth="1"/><colspec colname="2" colwidth="1"/>'
+        '<tbody><row><entry namest="9">a</entry></row></tbody>'
+        "</tgroup></table>"
+    )
+    table = XmlTable(xml).parse()
+    assert table is not None
+    assert table.num_cols == 2
+    # the malformed cell is dropped; a well-formed sibling table still parses
+    well_formed = (
+        '<table><tgroup cols="2">'
+        '<colspec colname="1" colwidth="1"/><colspec colname="2" colwidth="1"/>'
+        "<tbody><row><entry>a</entry><entry>b</entry></row></tbody>"
+        "</tgroup></table>"
+    )
+    ok = XmlTable(well_formed).parse()
+    assert ok is not None
+    assert [cell.text for cell in ok.table_cells] == ["a", "b"]
 
 
 def test_patent_uspto_ice(patents):

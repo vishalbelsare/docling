@@ -1,6 +1,21 @@
-# WARNING
-# This example demonstrates only how to develop a new enrichment model.
-# It does not run the actual picture classifier model.
+# %% [markdown]
+# Developing a picture enrichment model (classifier scaffold only).
+#
+# What this example does
+# - Demonstrates how to implement an enrichment model that annotates pictures.
+# - Adds a dummy PictureClassificationData entry to each PictureItem.
+#
+# Important
+# - This is a scaffold for development; it does not run a real classifier.
+#
+# How to run
+# - From the repo root: `python docs/examples/develop_picture_enrichment.py`.
+#
+# Notes
+# - Enables picture image generation and sets `images_scale` to improve crops.
+# - Extends `StandardPdfPipeline` with a custom enrichment stage.
+
+# %%
 
 import logging
 from collections.abc import Iterable
@@ -10,10 +25,11 @@ from typing import Any
 from docling_core.types.doc import (
     DoclingDocument,
     NodeItem,
-    PictureClassificationClass,
-    PictureClassificationData,
+    PictureClassificationMetaField,
     PictureItem,
+    PictureMeta,
 )
+from docling_core.types.doc.document import PictureClassificationPrediction
 
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
@@ -43,16 +59,23 @@ class ExamplePictureClassifierEnrichmentModel(BaseEnrichmentModel):
             assert isinstance(element, PictureItem)
 
             # uncomment this to interactively visualize the image
-            # element.get_image(doc).show()
+            # element.get_image(doc).show()  # may block; avoid in headless runs
 
-            element.annotations.append(
-                PictureClassificationData(
-                    provenance="example_classifier-0.0.1",
-                    predicted_classes=[
-                        PictureClassificationClass(class_name="dummy", confidence=0.42)
-                    ],
-                )
+            # Populate the new meta.classification field
+            classification_data = PictureClassificationMetaField(
+                predictions=[
+                    PictureClassificationPrediction(
+                        created_by="example_classifier-0.0.1",
+                        class_name="dummy",
+                        confidence=0.42,
+                    )
+                ],
             )
+
+            if element.meta is not None:
+                element.meta.classification = classification_data
+            else:
+                element.meta = PictureMeta(classification=classification_data)
 
             yield element
 
@@ -77,7 +100,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     data_folder = Path(__file__).parent / "../../tests/data"
-    input_doc_path = data_folder / "pdf/2206.01062.pdf"
+    input_doc_path = data_folder / "pdf/sources/2206.01062.pdf"
 
     pipeline_options = ExamplePictureClassifierPipelineOptions()
     pipeline_options.images_scale = 2.0
@@ -96,7 +119,7 @@ def main():
     for element, _level in result.document.iterate_items():
         if isinstance(element, PictureItem):
             print(
-                f"The model populated the `data` portion of picture {element.self_ref}:\n{element.annotations}"
+                f"The model populated the `meta` portion of picture {element.self_ref}:\n{element.meta}"
             )
 
 

@@ -14,8 +14,18 @@ Downloading layout model...
 Downloading tableformer model...
 Downloading picture classifier model...
 Downloading code formula model...
-Downloading easyocr models...
+Downloading rapidocr torch chinese models...
+Downloading rapidocr torch english models...
+Downloading rapidocr onnxruntime chinese models...
+Downloading rapidocr onnxruntime english models...
 Models downloaded into $HOME/.cache/docling/models.
+```
+
+To prefetch EasyOCR recognition models for specific languages, repeat
+`--easyocr-lang` with the same language codes used by `EasyOcrOptions.lang`:
+
+```sh
+$ docling-tools models download easyocr --easyocr-lang ch_sim --easyocr-lang ja
 ```
 
 Alternatively, models can be programmatically downloaded using `docling.utils.model_downloader.download_models()`.
@@ -93,6 +103,12 @@ The options in this list require the explicit `enable_remote_services=True` when
 The example file [custom_convert.py](../examples/custom_convert.py) contains multiple ways
 one can adjust the conversion pipeline and features.
 
+### Image resolution and scale
+
+Page coordinates use 72 points per inch. For image inputs, embedded DPI metadata
+determines the physical page size; missing DPI and `(1, 1)` DPI are treated as 72 DPI.
+Rendering at scale `n` produces `n` pixels per document point.
+
 ### Control PDF table extraction options
 
 You can control if table structure recognition should map the recognized structure back to PDF cells (default) or use text cells from the structure prediction itself.
@@ -132,6 +148,95 @@ doc_converter = DocumentConverter(
 ```
 
 
+### Extract the native content of a PDF
+
+`NativePdfPipeline` uses docling-parse alone: one text item per native text cell
+and one picture per embedded bitmap, without layout, OCR or table models.
+
+```python
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import NativePdfPipelineOptions
+from docling.document_converter import DocumentConverter, NativePdfFormatOption
+
+pipeline_options = NativePdfPipelineOptions()
+pipeline_options.generate_page_images = True
+pipeline_options.images_scale = 2.0
+
+doc_converter = DocumentConverter(
+    format_options={
+        InputFormat.PDF: NativePdfFormatOption(pipeline_options=pipeline_options)
+    }
+)
+```
+
+Set `generate_page_images=False` to skip rendering. `parser_threads` configures
+docling-parse independently of model-inference `accelerator_options.num_threads`.
+
+```sh
+docling --pipeline native --from pdf FILE
+docling --pipeline native --from pdf --parser-threads 8 FILE
+```
+
+
+### Recover PDF heading levels
+
+The layout model marks section headers but not how deep they sit, so by default every heading in a
+PDF comes out at level 1. Docling can infer the levels from the PDF bookmarks, from outline
+numbering and from the heading's font styling:
+
+```python
+from docling.datamodel.base_models import InputFormat
+from docling.datamodel.pipeline_options import (
+    HeadingHierarchyOptions,
+    PdfPipelineOptions,
+)
+from docling.document_converter import DocumentConverter, PdfFormatOption
+
+pipeline_options = PdfPipelineOptions()
+pipeline_options.heading_hierarchy_options = HeadingHierarchyOptions(enabled=True)
+pipeline_options.generate_parsed_pages = True  # required by the font-style signal
+
+doc_converter = DocumentConverter(
+    format_options={
+        InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+    }
+)
+```
+
+See [PDF heading levels](./heading_levels.md) for the signals, their precedence and all options.
+
+### Apple Pages options
+
+Headers, footers and footnotes go into the `furniture` content layer, and
+comments into `notes`, so they stay out of the reading order by default. To
+include them in an export, pass the extra layers explicitly (this applies to
+any `DoclingDocument`, not just Pages):
+
+```python
+from docling_core.types.doc import ContentLayer
+from docling.document_converter import DocumentConverter
+
+doc = DocumentConverter().convert("report.pages").document
+print(doc.export_to_markdown(included_content_layers={ContentLayer.BODY, ContentLayer.FURNITURE}))
+```
+
+The container is untrusted input, so size limits apply. They can be tuned with
+`IWorkBackendOptions`:
+
+```python
+from docling.datamodel.backend_options import IWorkBackendOptions
+from docling.datamodel.base_models import InputFormat
+from docling.document_converter import DocumentConverter, IWorkPagesFormatOption
+
+doc_converter = DocumentConverter(
+    format_options={
+        InputFormat.IWORK_PAGES: IWorkPagesFormatOption(
+            backend_options=IWorkBackendOptions(max_total_bytes=50 * 1024 * 1024)
+        )
+    }
+)
+```
+
 ## Impose limits on the document size
 
 You can limit the file size and number of pages which should be allowed to process per document:
@@ -163,37 +268,3 @@ result = converter.convert(source)
 ## Limit resource usage
 
 You can limit the CPU threads used by Docling by setting the environment variable `OMP_NUM_THREADS` accordingly. The default setting is using 4 CPU threads.
-
-
-## Use specific backend converters
-
-!!! note
-
-    This section discusses directly invoking a [backend](../concepts/architecture.md),
-    i.e. using a low-level API. This should only be done when necessary. For most cases,
-    using a `DocumentConverter` (high-level API) as discussed in the sections above
-    should suffice — and is the recommended way.
-
-By default, Docling will try to identify the document format to apply the appropriate conversion backend (see the list of [supported formats](supported_formats.md)).
-You can restrict the `DocumentConverter` to a set of allowed document formats, as shown in the [Multi-format conversion](../examples/run_with_formats.py) example.
-Alternatively, you can also use the specific backend that matches your document content. For instance, you can use `HTMLDocumentBackend` for HTML pages:
-
-```python
-import urllib.request
-from io import BytesIO
-from docling.backend.html_backend import HTMLDocumentBackend
-from docling.datamodel.base_models import InputFormat
-from docling.datamodel.document import InputDocument
-
-url = "https://en.wikipedia.org/wiki/Duck"
-text = urllib.request.urlopen(url).read()
-in_doc = InputDocument(
-    path_or_stream=BytesIO(text),
-    format=InputFormat.HTML,
-    backend=HTMLDocumentBackend,
-    filename="duck.html",
-)
-backend = HTMLDocumentBackend(in_doc=in_doc, path_or_stream=BytesIO(text))
-dl_doc = backend.convert()
-print(dl_doc.export_to_markdown())
-```

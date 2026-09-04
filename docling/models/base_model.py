@@ -1,10 +1,19 @@
+# SPDX-FileCopyrightText: The Docling Contributors
+# SPDX-License-Identifier: MIT
+
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import Any, Generic, Optional, Protocol, Type, Union
 
 import numpy as np
-from docling_core.types.doc import BoundingBox, DocItem, DoclingDocument, NodeItem
+from docling_core.types.doc import (
+    BoundingBox,
+    DocItem,
+    DoclingDocument,
+    NodeItem,
+    PictureItem,
+)
 from PIL.Image import Image
 from typing_extensions import TypeVar
 
@@ -70,6 +79,24 @@ class BaseVlmPageModel(BasePageModel, BaseVlmModel):
     vlm_options: InlineVlmOptions
     processor: Any
 
+    def _build_prompt_safe(self, page: Page) -> str:
+        """Build prompt with backward compatibility for user overrides.
+
+        Tries to call build_prompt with _internal_page parameter (for layout-aware
+        pipelines). Falls back to basic call if user override doesn't accept it.
+
+        Args:
+            page: The full Page object with layout predictions and parsed_page.
+
+        Returns:
+            The formatted prompt string.
+        """
+        try:
+            return self.vlm_options.build_prompt(page.parsed_page, _internal_page=page)
+        except TypeError:
+            # User override doesn't accept _internal_page - fall back to basic call
+            return self.vlm_options.build_prompt(page.parsed_page)
+
     @abstractmethod
     def __call__(
         self, conv_res: ConversionResult, page_batch: Iterable[Page]
@@ -82,7 +109,8 @@ class BaseVlmPageModel(BasePageModel, BaseVlmModel):
 
         if self.vlm_options.transformers_prompt_style == TransformersPromptStyle.RAW:
             return user_prompt
-
+        elif self.vlm_options.transformers_prompt_style == TransformersPromptStyle.NONE:
+            return ""
         elif self.vlm_options.repo_id == "microsoft/Phi-4-multimodal-instruct":
             _log.debug("Using specialized prompt for Phi-4")
             # Note: This might need adjustment for VLLM vs transformers
@@ -100,10 +128,6 @@ class BaseVlmPageModel(BasePageModel, BaseVlmModel):
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": "This is a page from a document.",
-                        },
                         {"type": "image"},
                         {"type": "text", "text": user_prompt},
                     ],
@@ -164,23 +188,34 @@ class BaseItemAndImageEnrichmentModel(
             return None
 
         assert isinstance(element, DocItem)
+
+        # Allow the case of documents without page images but embedded images (e.g. Word and HTML docs)
+        if isinstance(element, PictureItem):
+            embedded_im = element.get_image(conv_res.document)
+            if embedded_im is not None:
+                return ItemAndImageEnrichmentElement(item=element, image=embedded_im)
+            elif len(element.prov) == 0 or not conv_res.pages:
+                return None
+
+        # Crop the image form the page
         element_prov = element.prov[0]
-
         bbox = element_prov.bbox
-        width = bbox.r - bbox.l
-        height = bbox.t - bbox.b
-
-        # TODO: move to a utility in the BoundingBox class
-        expanded_bbox = BoundingBox(
-            l=bbox.l - width * self.expansion_factor,
-            t=bbox.t + height * self.expansion_factor,
-            r=bbox.r + width * self.expansion_factor,
-            b=bbox.b - height * self.expansion_factor,
-            coord_origin=bbox.coord_origin,
+        expanded_bbox = bbox.expand_by_scale(
+            self.expansion_factor, self.expansion_factor
         )
 
-        page_ix = element_prov.page_no - conv_res.pages[0].page_no - 1
+        page_ix = element_prov.page_no - conv_res.pages[0].page_no
         cropped_image = conv_res.pages[page_ix].get_image(
             scale=self.images_scale, cropbox=expanded_bbox
         )
+
+        # Allow for images being embedded without the page backend or page images
+        if cropped_image is None and isinstance(element, PictureItem):
+            embedded_im = element.get_image(conv_res.document)
+            if embedded_im is not None:
+                return ItemAndImageEnrichmentElement(item=element, image=embedded_im)
+            else:
+                return None
+
+        # Return the proper cropped image
         return ItemAndImageEnrichmentElement(item=element, image=cropped_image)

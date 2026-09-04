@@ -1,32 +1,60 @@
+# SPDX-FileCopyrightText: The Docling Contributors
+# SPDX-License-Identifier: MIT
+
 import functools
 import logging
 import time
 import traceback
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from typing import Any, Callable, List
+from pathlib import Path
+from typing import Any, Callable, List, Optional
 
-from docling_core.types.doc import NodeItem
+from docling_core.types.doc import DocItem, DoclingDocument, NodeItem
 
 from docling.backend.abstract_backend import (
     AbstractDocumentBackend,
     PaginatedDocumentBackend,
 )
-from docling.backend.pdf_backend import PdfDocumentBackend
 from docling.datamodel.base_models import (
     ConversionStatus,
     DoclingComponentType,
     ErrorItem,
+    FailureCategory,
     Page,
 )
+from docling.datamodel.chart_extraction_options import (
+    ChartExtractionModelKind,
+    ChartExtractionModelOptions,
+)
 from docling.datamodel.document import ConversionResult, InputDocument
-from docling.datamodel.pipeline_options import PdfPipelineOptions, PipelineOptions
+from docling.datamodel.pipeline_options import (
+    ConvertPipelineOptions,
+    PdfPipelineOptions,
+    PipelineOptions,
+)
 from docling.datamodel.settings import settings
 from docling.models.base_model import GenericEnrichmentModel
+from docling.models.factories import get_picture_description_factory
+from docling.models.picture_description_base_model import PictureDescriptionBaseModel
+from docling.models.stages.picture_classifier.document_picture_classifier import (
+    DocumentPictureClassifier,
+)
 from docling.utils.profiling import ProfilingScope, TimeRecorder
 from docling.utils.utils import chunkify
 
 _log = logging.getLogger(__name__)
+
+
+def get_expected_page_nos(conv_res: ConversionResult) -> list[int]:
+    """The 1-based page numbers to convert, clipped to the requested page range."""
+    start_page, end_page = conv_res.input.limits.page_range
+    return list(
+        range(
+            max(1, start_page),
+            min(conv_res.input.page_count, end_page) + 1,
+        )
+    )
 
 
 class BasePipeline(ABC):
@@ -35,6 +63,18 @@ class BasePipeline(ABC):
         self.keep_images = False
         self.build_pipe: List[Callable] = []
         self.enrichment_pipe: List[GenericEnrichmentModel[Any]] = []
+
+        self.artifacts_path: Optional[Path] = None
+        if pipeline_options.artifacts_path is not None:
+            self.artifacts_path = Path(pipeline_options.artifacts_path).expanduser()
+        elif settings.artifacts_path is not None:
+            self.artifacts_path = Path(settings.artifacts_path).expanduser()
+
+        if self.artifacts_path is not None and not self.artifacts_path.is_dir():
+            raise RuntimeError(
+                f"The value of {self.artifacts_path=} is not valid. "
+                "When defined, it must point to a folder containing all models required by the pipeline."
+            )
 
     def execute(self, in_doc: InputDocument, raises_on_error: bool) -> ConversionResult:
         conv_res = ConversionResult(input=in_doc)
@@ -51,14 +91,61 @@ class BasePipeline(ABC):
                 # From this stage, all operations should rely only on conv_res.output
                 conv_res = self._enrich_document(conv_res)
                 conv_res.status = self._determine_status(conv_res)
+                # A document that completed but recorded errors is not a clean
+                # success: never report SUCCESS while conv_res.errors is non-empty.
+                if conv_res.status == ConversionStatus.SUCCESS and conv_res.errors:
+                    conv_res.status = ConversionStatus.PARTIAL_SUCCESS
         except Exception as e:
             conv_res.status = ConversionStatus.FAILURE
-            if raises_on_error:
-                raise e
+            if not raises_on_error:
+                error_item = ErrorItem(
+                    component_type=DoclingComponentType.PIPELINE,
+                    module_name=self.__class__.__name__,
+                    error_message=str(e),
+                )
+                conv_res.errors.append(error_item)
+            else:
+                raise RuntimeError(f"Pipeline {self.__class__.__name__} failed") from e
         finally:
             self._unload(conv_res)
 
         return conv_res
+
+    @staticmethod
+    def _concatenate_page_documents(
+        page_documents: list[tuple[int, DoclingDocument]],
+    ) -> DoclingDocument:
+        if not page_documents:
+            return DoclingDocument(name="")
+
+        document = DoclingDocument.concatenate(
+            docs=[page_document for _, page_document in page_documents]
+        )
+        page_no_map = {
+            current_page_no: requested_page_no
+            for current_page_no, (requested_page_no, _) in zip(
+                sorted(document.pages), page_documents
+            )
+        }
+        document.pages = {
+            page_no_map[page_no]: page_item
+            for page_no, page_item in document.pages.items()
+        }
+        for page_no, page_item in document.pages.items():
+            page_item.page_no = page_no
+        for item, _level in document.iterate_items():
+            if isinstance(item, DocItem):
+                for provenance in item.prov:
+                    provenance.page_no = page_no_map[provenance.page_no]
+        return document
+
+    @staticmethod
+    def _release_page_resources(page: Page) -> None:
+        if page._backend is not None:
+            page._backend.unload()
+            page._backend = None
+        page._image_cache = {}
+        page.parsed_page = None
 
     @abstractmethod
     def _build_document(self, conv_res: ConversionResult) -> ConversionResult:
@@ -108,15 +195,98 @@ class BasePipeline(ABC):
     def is_backend_supported(cls, backend: AbstractDocumentBackend):
         pass
 
-    # def _apply_on_elements(self, element_batch: Iterable[NodeItem]) -> Iterable[Any]:
-    #    for model in self.build_pipe:
-    #        element_batch = model(element_batch)
-    #
-    #    yield from element_batch
+
+class ConvertPipeline(BasePipeline):
+    def __init__(self, pipeline_options: ConvertPipelineOptions):
+        super().__init__(pipeline_options)
+        self.pipeline_options: ConvertPipelineOptions
+
+        # We need picture classification to do chart_extraction
+        # Use local variable to avoid mutating shared pipeline_options
+        do_picture_classification = (
+            pipeline_options.do_picture_classification
+            or pipeline_options.do_chart_extraction
+        )
+
+        # ------ Common enrichment models working on all backends
+
+        # Picture description model
+        if (
+            picture_description_model := self._get_picture_description_model(
+                artifacts_path=self.artifacts_path
+            )
+        ) is None:
+            raise RuntimeError(
+                f"The specified picture description kind is not supported: {pipeline_options.picture_description_options.kind}."
+            )
+
+        self.enrichment_pipe = [
+            # Document Picture Classifier
+            DocumentPictureClassifier(
+                enabled=do_picture_classification,
+                artifacts_path=self.artifacts_path,
+                options=pipeline_options.picture_classification_options,
+                accelerator_options=pipeline_options.accelerator_options,
+                enable_remote_services=pipeline_options.enable_remote_services,
+            ),
+            # Document Picture description
+            picture_description_model,
+        ]
+
+        # Lazily import torch-backed chart extraction only when enabled so
+        # docling-slim / ONNX-only installs can import DocumentConverter without
+        # pulling torch+transformers.
+        if pipeline_options.do_chart_extraction:
+            from docling.models.stages.chart_extraction.granite_vision import (
+                ChartExtractionModelGraniteVision,
+                ChartExtractionModelGraniteVisionV4,
+            )
+
+            self.enrichment_pipe.extend(
+                [
+                    ChartExtractionModelGraniteVision(
+                        enabled=(
+                            pipeline_options.chart_extraction_options.model
+                            == ChartExtractionModelKind.GRANITE_VISION
+                        ),
+                        artifacts_path=self.artifacts_path,
+                        options=pipeline_options.chart_extraction_options,
+                        accelerator_options=pipeline_options.accelerator_options,
+                    ),
+                    ChartExtractionModelGraniteVisionV4(
+                        enabled=(
+                            pipeline_options.chart_extraction_options.model
+                            == ChartExtractionModelKind.GRANITE_VISION_V4
+                        ),
+                        artifacts_path=self.artifacts_path,
+                        options=pipeline_options.chart_extraction_options,
+                        accelerator_options=pipeline_options.accelerator_options,
+                    ),
+                ]
+            )
+
+    def _get_picture_description_model(
+        self, artifacts_path: Optional[Path] = None
+    ) -> Optional[PictureDescriptionBaseModel]:
+        factory = get_picture_description_factory(
+            allow_external_plugins=self.pipeline_options.allow_external_plugins
+        )
+        return factory.create_instance(
+            options=self.pipeline_options.picture_description_options,
+            enabled=self.pipeline_options.do_picture_description,
+            enable_remote_services=self.pipeline_options.enable_remote_services,
+            artifacts_path=artifacts_path,
+            accelerator_options=self.pipeline_options.accelerator_options,
+        )
+
+    @classmethod
+    @abstractmethod
+    def get_default_options(cls) -> ConvertPipelineOptions:
+        pass
 
 
-class PaginatedPipeline(BasePipeline):  # TODO this is a bad name.
-    def __init__(self, pipeline_options: PipelineOptions):
+class PaginatedPipeline(ConvertPipeline):  # TODO this is a bad name.
+    def __init__(self, pipeline_options: ConvertPipelineOptions):
         super().__init__(pipeline_options)
         self.keep_backend = False
 
@@ -143,7 +313,7 @@ class PaginatedPipeline(BasePipeline):  # TODO this is a bad name.
             for i in range(conv_res.input.page_count):
                 start_page, end_page = conv_res.input.limits.page_range
                 if (start_page - 1) <= i <= (end_page - 1):
-                    conv_res.pages.append(Page(page_no=i))
+                    conv_res.pages.append(Page(page_no=i + 1))
 
             try:
                 total_pages_processed = 0
@@ -182,9 +352,20 @@ class PaginatedPipeline(BasePipeline):  # TODO this is a bad name.
                         self.pipeline_options.document_timeout is not None
                         and total_elapsed_time > self.pipeline_options.document_timeout
                     ):
-                        _log.warning(
-                            f"Document processing time ({total_elapsed_time:.3f} seconds) exceeded the specified timeout of {self.pipeline_options.document_timeout:.3f} seconds"
+                        timeout_msg = (
+                            f"Document processing timeout: exceeded {self.pipeline_options.document_timeout:.3f}s limit "
+                            f"after {total_elapsed_time:.3f}s. Processed {total_pages_processed}/{len(conv_res.pages)} pages."
                         )
+                        _log.warning(timeout_msg)
+
+                        # Add structured timeout error
+                        timeout_error = ErrorItem(
+                            component_type=DoclingComponentType.PIPELINE,
+                            module_name="base_pipeline",
+                            error_message=timeout_msg,
+                            category=FailureCategory.TIMEOUT,
+                        )
+                        conv_res.errors.append(timeout_error)
                         conv_res.status = ConversionStatus.PARTIAL_SUCCESS
                         break
                     total_pages_processed += len(page_batch)
@@ -240,7 +421,9 @@ class PaginatedPipeline(BasePipeline):  # TODO this is a bad name.
                     ErrorItem(
                         component_type=DoclingComponentType.DOCUMENT_BACKEND,
                         module_name=type(page._backend).__name__,
-                        error_message=f"Page {page.page_no} failed to parse.",
+                        error_message="Page failed to parse.",
+                        category=FailureCategory.BACKEND_FAILURE,
+                        page_no=page.page_no,
                     )
                 )
                 status = ConversionStatus.PARTIAL_SUCCESS

@@ -1,22 +1,58 @@
+# SPDX-FileCopyrightText: The Docling Contributors
+# SPDX-License-Identifier: MIT
+
 """Backend to parse patents from the United States Patent Office (USPTO).
 
 The parsers included in this module can handle patent grants published since 1976 and
 patent applications since 2001.
 The original files can be found in https://bulkdata.uspto.gov.
+
+Security Note:
+    This module uses defusedxml.sax.make_parser() with security settings to protect
+    against XML External Entity (XXE) attacks and entity expansion attacks (Billion
+    Laughs/CWE-776). The parser is configured with:
+
+    - feature_external_ges: False (blocks external general entity resolution)
+    - feature_external_pes: False (blocks external parameter entity resolution)
+    - forbid_dtd: False (allows DTD declarations required by USPTO XML format)
+    - forbid_entities: False (allows entity declarations including NDATA)
+    - forbid_external: False (allows SYSTEM declarations in DTD)
+
+    Security Analysis:
+    1. XXE Prevention: While external entities can be declared (forbid_external=False),
+       they are never resolved or fetched due to feature_external_ges=False and
+       feature_external_pes=False. This prevents XXE attacks.
+
+    2. Billion Laughs Mitigation: defusedxml's built-in entity expansion limits
+       (MAX_ENTITY_EXPANSION=10,000) prevent exponential entity expansion from
+       causing memory exhaustion. While not completely blocking entity expansion,
+       this limit prevents the worst-case denial-of-service scenarios.
+
+    3. NDATA Entities: USPTO files use NDATA entities for image references
+       (e.g., <!ENTITY img SYSTEM "file.tif" NDATA TIF>). These are unparsed
+       entities that don't expand inline and aren't fetched due to the external
+       entity resolution being disabled.
+
+    This configuration balances security with USPTO format compatibility. The key
+    insight is that defusedxml distinguishes between entity declaration (allowed)
+    and entity resolution/fetched (blocked), providing protection while allowing
+    the required DTD structure.
 """
+
+from __future__ import annotations
 
 import html
 import logging
 import re
-import xml.sax
-import xml.sax.xmlreader
 from abc import ABC, abstractmethod
 from enum import Enum, unique
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
-from typing import Final, Optional, Union
+from typing import Final
+from xml.sax import SAXParseException
+from xml.sax.handler import ContentHandler, feature_external_ges, feature_external_pes
+from xml.sax.xmlreader import AttributesImpl
 
-from bs4 import BeautifulSoup, Tag
 from docling_core.types.doc import (
     DocItem,
     DocItemLabel,
@@ -33,10 +69,27 @@ from typing_extensions import Self, TypedDict, override
 from docling.backend.abstract_backend import DeclarativeDocumentBackend
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.document import InputDocument
+from docling.exceptions import DocumentLoadError
+
+_BS4_AVAILABLE: bool = False
+_BS4_IMPORT_ERROR: ImportError | None = None
+try:  # pragma: no cover - import-time guard
+    from bs4 import BeautifulSoup, Tag
+    from defusedxml.common import DefusedXmlException
+    from defusedxml.sax import make_parser
+
+    _BS4_AVAILABLE = True
+except ImportError as e:  # pragma: no cover - import-time guard
+    _BS4_IMPORT_ERROR = e
+
+_INSTALL_HINT = (
+    "The 'beautifulsoup4' and 'defusedxml' packages are required to process USPTO patent files. "
+    "Install them with `pip install 'docling-slim[format-xml-uspto]'`."
+)
 
 _log = logging.getLogger(__name__)
 
-XML_DECLARATION: Final = '<?xml version="1.0" encoding="UTF-8"?>'
+XML_DECLARATION: Final[str] = '<?xml version="1.0" encoding="UTF-8"?>'
 
 
 @unique
@@ -59,18 +112,18 @@ class PatentHeading(Enum):
 
 class PatentUsptoDocumentBackend(DeclarativeDocumentBackend):
     @override
-    def __init__(
-        self, in_doc: InputDocument, path_or_stream: Union[BytesIO, Path]
-    ) -> None:
+    def __init__(self, in_doc: InputDocument, path_or_stream: BytesIO | Path) -> None:
+        if not _BS4_AVAILABLE:
+            raise ImportError(_INSTALL_HINT) from _BS4_IMPORT_ERROR
         super().__init__(in_doc, path_or_stream)
 
         self.patent_content: str = ""
-        self.parser: Optional[PatentUspto] = None
+        self.parser: PatentUspto | None = None
 
         try:
             if isinstance(self.path_or_stream, BytesIO):
                 while line := self.path_or_stream.readline().decode("utf-8"):
-                    if line.startswith("<!DOCTYPE") or line == "PATN\n":
+                    if line.startswith("<!DOCTYPE") or line.rstrip("\r\n") == "PATN":
                         self._set_parser(line)
                     self.patent_content += line
             elif isinstance(self.path_or_stream, Path):
@@ -80,13 +133,13 @@ class PatentUsptoDocumentBackend(DeclarativeDocumentBackend):
                             self._set_parser(line)
                         self.patent_content += line
         except Exception as exc:
-            raise RuntimeError(
+            raise DocumentLoadError(
                 f"Could not initialize USPTO backend for file with hash {self.document_hash}."
             ) from exc
 
     def _set_parser(self, doctype: str) -> None:
-        doctype_line = doctype.lower()
-        if doctype == "PATN\n":
+        doctype_line = doctype.rstrip("\r\n").lower()
+        if doctype_line == "patn":
             self.parser = PatentUsptoGrantAps()
         elif "us-patent-application-v4" in doctype_line:
             self.parser = PatentUsptoIce()
@@ -153,7 +206,7 @@ class PatentUspto(ABC):
     """Parser of patent documents from the US Patent Office."""
 
     @abstractmethod
-    def parse(self, patent_content: str) -> Optional[DoclingDocument]:
+    def parse(self, patent_content: str) -> DoclingDocument | None:
         """Parse a USPTO patent.
 
         Parameters:
@@ -177,12 +230,26 @@ class PatentUsptoIce(PatentUspto):
         self.handler = PatentUsptoIce.PatentHandler()
         self.pattern = re.compile(r"^(<table .*?</table>)", re.MULTILINE | re.DOTALL)
 
-    def parse(self, patent_content: str) -> Optional[DoclingDocument]:
+    def parse(self, patent_content: str) -> DoclingDocument | None:
         try:
-            xml.sax.parseString(patent_content, self.handler)
-        except xml.sax._exceptions.SAXParseException as exc_sax:
-            _log.error(f"Error in parsing USPTO document: {exc_sax}")
-
+            parser = make_parser()
+            parser.setFeature(feature_external_ges, False)
+            parser.setFeature(feature_external_pes, False)
+            parser.forbid_dtd = False
+            parser.forbid_entities = False
+            parser.forbid_external = False
+            parser.setContentHandler(self.handler)
+            parser.parse(StringIO(patent_content))
+        except SAXParseException as exc_sax:
+            _log.error(f"Error in parsing USPTO document (malformed XML): {exc_sax}")
+            return None
+        except DefusedXmlException as exc_defused:
+            _log.error(
+                f"Error in parsing USPTO document (security issue detected): {exc_defused}"
+            )
+            return None
+        except Exception as exc:
+            _log.error(f"Unexpected error in parsing USPTO document: {exc}")
             return None
 
         doc = self.handler.doc
@@ -209,11 +276,11 @@ class PatentUsptoIce(PatentUspto):
 
         return doc
 
-    class PatentHandler(xml.sax.handler.ContentHandler):
+    class PatentHandler(ContentHandler):
         """SAX ContentHandler for patent documents."""
 
-        APP_DOC_ELEMENT: Final = "us-patent-application"
-        GRANT_DOC_ELEMENT: Final = "us-patent-grant"
+        APP_DOC_ELEMENT: Final[str] = "us-patent-application"
+        GRANT_DOC_ELEMENT: Final[str] = "us-patent-grant"
 
         @unique
         class Element(Enum):
@@ -247,11 +314,11 @@ class PatentUsptoIce(PatentUspto):
         def __init__(self) -> None:
             """Build an instance of the patent handler."""
             # Current patent being parsed
-            self.doc: Optional[DoclingDocument] = None
+            self.doc: DoclingDocument | None = None
             # Keep track of docling hierarchy level
             self.level: LevelNumber = 1
             # Keep track of docling parents by level
-            self.parents: dict[LevelNumber, Optional[DocItem]] = {1: None}
+            self.parents: dict[LevelNumber, DocItem | None] = {1: None}
             # Content to retain for the current patent
             self.property: list[str]
             self.claim: str
@@ -352,7 +419,7 @@ class PatentUsptoIce(PatentUspto):
                         self.text += content
 
         def _start_registered_elements(
-            self, tag: str, attributes: xml.sax.xmlreader.AttributesImpl
+            self, tag: str, attributes: AttributesImpl
         ) -> None:
             if tag in [member.value for member in self.Element]:
                 # special case for claims: claim lines may start before the
@@ -514,12 +581,26 @@ class PatentUsptoGrantV2(PatentUspto):
         self.pattern = re.compile(r"^(<table .*?</table>)", re.MULTILINE | re.DOTALL)
 
     @override
-    def parse(self, patent_content: str) -> Optional[DoclingDocument]:
+    def parse(self, patent_content: str) -> DoclingDocument | None:
         try:
-            xml.sax.parseString(patent_content, self.handler)
-        except xml.sax._exceptions.SAXParseException as exc_sax:
-            _log.error(f"Error in parsing USPTO document: {exc_sax}")
-
+            parser = make_parser()
+            parser.setFeature(feature_external_ges, False)
+            parser.setFeature(feature_external_pes, False)
+            parser.forbid_dtd = False
+            parser.forbid_entities = False
+            parser.forbid_external = False
+            parser.setContentHandler(self.handler)
+            parser.parse(StringIO(patent_content))
+        except SAXParseException as exc_sax:
+            _log.error(f"Error in parsing USPTO document (malformed XML): {exc_sax}")
+            return None
+        except DefusedXmlException as exc_defused:
+            _log.error(
+                f"Error in parsing USPTO document (security issue detected): {exc_defused}"
+            )
+            return None
+        except Exception as exc:
+            _log.error(f"Unexpected error in parsing USPTO document: {exc}")
             return None
 
         doc = self.handler.doc
@@ -546,11 +627,11 @@ class PatentUsptoGrantV2(PatentUspto):
 
         return doc
 
-    class PatentHandler(xml.sax.handler.ContentHandler):
+    class PatentHandler(ContentHandler):
         """SAX ContentHandler for patent documents."""
 
-        GRANT_DOC_ELEMENT: Final = "PATDOC"
-        CLAIM_STATEMENT: Final = "What is claimed is:"
+        GRANT_DOC_ELEMENT: Final[str] = "PATDOC"
+        CLAIM_STATEMENT: Final[str] = "What is claimed is:"
 
         @unique
         class Element(Enum):
@@ -585,11 +666,11 @@ class PatentUsptoGrantV2(PatentUspto):
         def __init__(self) -> None:
             """Build an instance of the patent handler."""
             # Current patent being parsed
-            self.doc: Optional[DoclingDocument] = None
+            self.doc: DoclingDocument | None = None
             # Keep track of docling hierarchy level
             self.level: LevelNumber = 1
             # Keep track of docling parents by level
-            self.parents: dict[LevelNumber, Optional[DocItem]] = {1: None}
+            self.parents: dict[LevelNumber, DocItem | None] = {1: None}
             # Content to retain for the current patent
             self.property: list[str]
             self.claim: str
@@ -630,7 +711,7 @@ class PatentUsptoGrantV2(PatentUspto):
                     escaped = self.style_html.get_greek_from_iso8879(f"&{name};")
                     unescaped = html.unescape(escaped)
                     if unescaped == escaped:
-                        logging.debug("Unrecognized HTML entity: " + name)
+                        _log.debug("Unrecognized HTML entity: " + name)
                         return
 
                     if element in (
@@ -684,7 +765,7 @@ class PatentUsptoGrantV2(PatentUspto):
                         self.text += content
 
         def _start_registered_elements(
-            self, tag: str, attributes: xml.sax.xmlreader.AttributesImpl
+            self, tag: str, attributes: AttributesImpl
         ) -> None:
             if tag in [member.value for member in self.Element]:
                 if (
@@ -887,13 +968,13 @@ class PatentUsptoGrantAps(PatentUspto):
     @override
     def __init__(self) -> None:
         """Build an instance of PatentUsptoGrantAps class."""
-        self.doc: Optional[DoclingDocument] = None
+        self.doc: DoclingDocument | None = None
         # Keep track of docling hierarchy level
         self.level: LevelNumber = 1
         # Keep track of docling parents by level
-        self.parents: dict[LevelNumber, Optional[DocItem]] = {1: None}
+        self.parents: dict[LevelNumber, DocItem | None] = {1: None}
 
-    def get_last_text_item(self) -> Optional[TextItem]:
+    def get_last_text_item(self) -> TextItem | None:
         """Get the last text item at the current document level.
 
         Returns:
@@ -1030,7 +1111,7 @@ class PatentUsptoGrantAps(PatentUspto):
                 parent=self.parents[self.level],
             )
 
-    def parse(self, patent_content: str) -> Optional[DoclingDocument]:
+    def parse(self, patent_content: str) -> DoclingDocument | None:
         self.doc = self.doc = DoclingDocument(name="file")
         section: str = ""
         key: str = ""
@@ -1075,12 +1156,26 @@ class PatentUsptoAppV1(PatentUspto):
         self.pattern = re.compile(r"^(<table .*?</table>)", re.MULTILINE | re.DOTALL)
 
     @override
-    def parse(self, patent_content: str) -> Optional[DoclingDocument]:
+    def parse(self, patent_content: str) -> DoclingDocument | None:
         try:
-            xml.sax.parseString(patent_content, self.handler)
-        except xml.sax._exceptions.SAXParseException as exc_sax:
-            _log.error(f"Error in parsing USPTO document: {exc_sax}")
-
+            parser = make_parser()
+            parser.setFeature(feature_external_ges, False)
+            parser.setFeature(feature_external_pes, False)
+            parser.forbid_dtd = False
+            parser.forbid_entities = False
+            parser.forbid_external = False
+            parser.setContentHandler(self.handler)
+            parser.parse(StringIO(patent_content))
+        except SAXParseException as exc_sax:
+            _log.error(f"Error in parsing USPTO document (malformed XML): {exc_sax}")
+            return None
+        except DefusedXmlException as exc_defused:
+            _log.error(
+                f"Error in parsing USPTO document (security issue detected): {exc_defused}"
+            )
+            return None
+        except Exception as exc:
+            _log.error(f"Unexpected error in parsing USPTO document: {exc}")
             return None
 
         doc = self.handler.doc
@@ -1107,10 +1202,10 @@ class PatentUsptoAppV1(PatentUspto):
 
         return doc
 
-    class PatentHandler(xml.sax.handler.ContentHandler):
+    class PatentHandler(ContentHandler):
         """SAX ContentHandler for patent documents."""
 
-        APP_DOC_ELEMENT: Final = "patent-application-publication"
+        APP_DOC_ELEMENT: Final[str] = "patent-application-publication"
 
         @unique
         class Element(Enum):
@@ -1146,11 +1241,11 @@ class PatentUsptoAppV1(PatentUspto):
         def __init__(self) -> None:
             """Build an instance of the patent handler."""
             # Current patent being parsed
-            self.doc: Optional[DoclingDocument] = None
+            self.doc: DoclingDocument | None = None
             # Keep track of docling hierarchy level
             self.level: LevelNumber = 1
             # Keep track of docling parents by level
-            self.parents: dict[LevelNumber, Optional[DocItem]] = {1: None}
+            self.parents: dict[LevelNumber, DocItem | None] = {1: None}
             # Content to retain for the current patent
             self.property: list[str]
             self.claim: str
@@ -1191,7 +1286,7 @@ class PatentUsptoAppV1(PatentUspto):
                     escaped = self.style_html.get_greek_from_iso8879(f"&{name};")
                     unescaped = html.unescape(escaped)
                     if unescaped == escaped:
-                        logging.debug("Unrecognized HTML entity: " + name)
+                        _log.debug("Unrecognized HTML entity: " + name)
                         return
 
                     if element in (
@@ -1245,7 +1340,7 @@ class PatentUsptoAppV1(PatentUspto):
                         self.text += content
 
         def _start_registered_elements(
-            self, tag: str, attributes: xml.sax.xmlreader.AttributesImpl
+            self, tag: str, attributes: AttributesImpl
         ) -> None:
             if tag in [member.value for member in self.Element]:
                 # special case for claims: claim lines may start before the
@@ -1421,6 +1516,12 @@ class XmlTable:
 
         Args:
             input: The xml content.
+
+        Security Note:
+            This parser uses BeautifulSoup with lxml, which can be vulnerable to XXE.
+            However, the input here comes from table strings extracted AFTER the main
+            document has been safely parsed by defusedxml, so the content is already
+            sanitized and safe to parse.
         """
         self.max_nbr_messages = 2
         self.nbr_messages = 0
@@ -1523,7 +1624,7 @@ class XmlTable:
 
         return ncols_max
 
-    def _parse_table(self, table: Tag) -> TableData:  # noqa: C901
+    def _parse_table(self, table: Tag) -> TableData:
         """Parse the content of a table tag.
 
         Args:
@@ -1615,7 +1716,8 @@ class XmlTable:
                                     end = ientry + 2
                                     shift = 1
 
-                                if end > len(tg_range["cell_offst"]):
+                                n_offst = len(tg_range["cell_offst"])
+                                if start < 1 or start > n_offst or end > n_offst:
                                     wrong_nbr_cols = True
                                     self.nbr_messages += 1
                                     if self.nbr_messages <= self.max_nbr_messages:
@@ -1678,7 +1780,7 @@ class XmlTable:
 
         return dl_table
 
-    def parse(self) -> Optional[TableData]:
+    def parse(self) -> TableData | None:
         """Parse the first table from an xml content.
 
         Returns:
@@ -1777,6 +1879,7 @@ class HtmlEntity:
                 "U": "&#119880;",
                 "V": "&#119881;",
                 "W": "&#119882;",
+                "X": "&#119883;",
                 "Y": "&#119884;",
                 "Z": "&#119885;",
                 "a": "&#119886;",
